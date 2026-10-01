@@ -20,6 +20,47 @@
 
 const SEED_CONSUMERS = {};
 
+// ---------------------------------------------------------------------------
+// Real consumer names and equipment counts from the survey (not part of the
+// raw pipeline slot JSON, so kept here and attached in normalizeConsumer).
+// equipment: [{ label, qty }] - one row per surveyed appliance type.
+// ---------------------------------------------------------------------------
+const CONSUMER_NAMES = {
+  "1122051212397660": "MYTRI INFRA",
+  "1122051212406289": "APPALA RAJA VARMA",
+  "1122051209192170": "N SRINIVASA RAO",
+  "1122051212272407": "SHILPA",
+  "112206A806395345": "NAVYA INFRACON PROJECTS PVT LTD",
+};
+
+const CONSUMER_EQUIPMENT = {
+  "1122051212397660": [
+    { label: "Induction Stove", qty: 1 }, { label: "AC", qty: 4 }, { label: "Fridge", qty: 1 },
+    { label: "Tube light", qty: 10 }, { label: "Fan", qty: 10 }, { label: "Television", qty: 2 },
+    { label: "Mixer", qty: 1 }, { label: "Washing machine", qty: 1 }, { label: "Grinder", qty: 1 },
+  ],
+  "1122051212406289": [
+    { label: "Induction Stove", qty: 1 }, { label: "AC", qty: 3 }, { label: "Fridge", qty: 1 },
+    { label: "Fan", qty: 1 }, { label: "Television", qty: 1 }, { label: "Mixer", qty: 1 },
+  ],
+  "1122051209192170": [
+    { label: "Micro Oven", qty: 1 }, { label: "AC", qty: 2 }, { label: "Fridge", qty: 1 },
+    { label: "Tube light", qty: 3 }, { label: "Bulb", qty: 3 }, { label: "Fan", qty: 5 },
+    { label: "Television", qty: 1 }, { label: "Mixer", qty: 1 }, { label: "Grinder", qty: 1 },
+    { label: "Washing machine", qty: 1 }, { label: "Motor", qty: 1 },
+  ],
+  "1122051212272407": [
+    { label: "Induction Stove", qty: 1 }, { label: "AC", qty: 3 }, { label: "Fridge", qty: 1 },
+    { label: "Tube light", qty: 6 }, { label: "Fan", qty: 4 }, { label: "Television", qty: 1 },
+    { label: "Mixer", qty: 1 }, { label: "Washing machine", qty: 1 }, { label: "Grinder", qty: 1 },
+  ],
+  "112206A806395345": [
+    { label: "Induction cooktop", qty: 1 }, { label: "AC", qty: 3 }, { label: "Fridge", qty: 2 },
+    { label: "Tube light", qty: 2 }, { label: "Bulb", qty: 20 }, { label: "Fan", qty: 6 },
+    { label: "Television", qty: 2 }, { label: "Washing machine", qty: 1 }, { label: "Grinder", qty: 1 },
+  ],
+};
+
 // =============================================================================
 // PASTE NEW CONSUMER OUTPUT HERE
 // -----------------------------------------------------------------------------
@@ -127,7 +168,9 @@ export function normalizeConsumer(parsed) {
       return slot;
     });
   });
-  return { name: "Consumer " + parsed.scno, days, dayWarnings };
+  const name = CONSUMER_NAMES[parsed.scno] || ("Consumer " + parsed.scno);
+  const equipment = CONSUMER_EQUIPMENT[parsed.scno] || [];
+  return { name, scno: parsed.scno, equipment, days, dayWarnings };
 }
 
 export function mergeConsumer(consumers, raw) {
@@ -144,6 +187,8 @@ export function mergeConsumer(consumers, raw) {
     [raw.scno]: existing
       ? {
           name: existing.name,
+          scno: existing.scno || raw.scno,
+          equipment: existing.equipment && existing.equipment.length ? existing.equipment : normalized.equipment,
           days: { ...existing.days, ...normalized.days },
           dayWarnings: { ...(existing.dayWarnings || {}), ...normalized.dayWarnings }
         }
