@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import {
-  PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from "recharts";
 import { INITIAL_CONSUMERS, mergeConsumer } from "./consumerData";
@@ -9,11 +9,12 @@ import { INITIAL_CONSUMERS, mergeConsumer } from "./consumerData";
 // Colors (light theme) - matches the companion Consumer Load Analyzer app
 // ---------------------------------------------------------------------------
 const COLORS = {
-  bg: "#F7F5F0", panel: "#FFFFFF", border: "#E2DDCF",
+  bg: "#FFFFFF", panel: "#FFFFFF", border: "#E6E3DA", soft: "#F7F6F2",
   text: "#26241E", muted: "#8A8473",
   teal: "#1E8A7A", amber: "#C77A2B", blue: "#3E6FA8", misc: "#C9C4B4"
 };
-const MONO = "ui-monospace, Menlo, monospace";
+const SANS = "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+const NUM = { fontVariantNumeric: "tabular-nums" };
 
 const MISC_LABEL = "Unexplained";
 const MISC_KEY = "__unexplained";
@@ -115,6 +116,7 @@ function analyze(slots) {
   let indPeakKw = 0, evPeakKw = 0;
   let minK = Infinity, maxK = -Infinity;
   let indPeak = null, evPeak = null, indFirst = null, indLast = null, evFirst = null, evLast = null;
+  let peakT = null;
   let hasBalance = false;
   let flaggedCount = 0;
 
@@ -126,15 +128,15 @@ function analyze(slots) {
     if (hasFlags(s)) flaggedCount += 1;
 
     minK = Math.min(minK, s.k);
-    maxK = Math.max(maxK, s.k);
+    if (s.k > maxK) { maxK = s.k; peakT = s.t; }
     totalKwh += s.k * 0.5;
     miscKwh += sp.misc * 0.5;
     indKwh += sp.ind * 0.5;
     evKwh += sp.ev * 0.5;
     if (sp.capped) cappedCount += 1;
 
-    if (sp.ind > ON_KW) { indCount += 1; if (!indFirst) indFirst = s.t; indLast = s.t; }
-    if (sp.ev > ON_KW) { evCount += 1; if (!evFirst) evFirst = s.t; evLast = s.t; }
+    if (sp.ind > ON_KW) { indCount += 1; if (!indFirst || s.t < indFirst) indFirst = s.t; if (!indLast || s.t > indLast) indLast = s.t; }
+    if (sp.ev > ON_KW) { evCount += 1; if (!evFirst || s.t < evFirst) evFirst = s.t; if (!evLast || s.t > evLast) evLast = s.t; }
     if (sp.ind > indPeakKw) { indPeakKw = sp.ind; indPeak = s; }
     if (sp.ev > evPeakKw) { evPeakKw = sp.ev; evPeak = s; }
 
@@ -155,7 +157,7 @@ function analyze(slots) {
   const otherKeys = Object.keys(othKwh).sort((x, y) => othKwh[y] - othKwh[x] || x.localeCompare(y));
 
   return {
-    miscKwh, indKwh, evKwh, totalKwh, cappedCount, minK, maxK,
+    miscKwh, indKwh, evKwh, totalKwh, cappedCount, minK, maxK, peakT,
     indPeak, evPeak, indCount, evCount, indPeakKw, evPeakKw, indFirst, indLast, evFirst, evLast,
     othKwh, othCount, othPeak, othPeakKw, othInferred, otherKeys,
     hasBalance, flaggedCount
@@ -196,26 +198,92 @@ function timeLabel(first, last) {
 }
 
 // ---------------------------------------------------------------------------
+// Styles shared by the pieces below
+// ---------------------------------------------------------------------------
+const CSS = `
+.asd-root, .asd-root * { box-sizing: border-box; }
+.asd-root { font-family: ${SANS}; color: ${COLORS.text}; background: ${COLORS.bg}; min-height: 100vh; }
+.asd-wrap { max-width: 1320px; margin: 0 auto; padding: 24px 28px 40px; }
+.asd-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.asd-grid { display: grid; grid-template-columns: minmax(0, 1fr) 372px; gap: 16px; align-items: start; }
+.asd-select { height: 40px; min-width: 260px; padding: 0 36px 0 12px; border: 1px solid ${COLORS.border}; border-radius: 8px;
+  background: #fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5l5 5 5-5' fill='none' stroke='%238A8473' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat right 12px center;
+  color: ${COLORS.text}; font: 500 14px ${SANS}; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.asd-select:hover { border-color: #CFC9B8; }
+.asd-select:focus { outline: 2px solid ${COLORS.teal}33; border-color: ${COLORS.teal}; }
+.asd-btn { height: 40px; padding: 0 16px; border: 0; border-radius: 8px; background: ${COLORS.teal}; color: #fff; font: 600 13px ${SANS};
+  display: inline-flex; align-items: center; cursor: pointer; white-space: nowrap; }
+.asd-btn:hover { filter: brightness(0.94); }
+.asd-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; border: 1px solid ${COLORS.border};
+  background: #fff; color: ${COLORS.text}; font: 500 12px ${SANS}; cursor: pointer; transition: opacity .12s, background .12s, border-color .12s; }
+.asd-chip:hover { background: ${COLORS.soft}; border-color: #CFC9B8; }
+.asd-chip:focus-visible { outline: 2px solid ${COLORS.teal}; outline-offset: 2px; }
+.asd-link { border: 0; background: none; color: ${COLORS.teal}; font: 600 12px ${SANS}; cursor: pointer; padding: 5px 4px; }
+.asd-link:hover { text-decoration: underline; }
+.asd-details > summary { list-style: none; cursor: pointer; }
+.asd-details > summary::-webkit-details-marker { display: none; }
+@media (max-width: 1060px) { .asd-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 860px) { .asd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .asd-wrap { padding: 16px; } }
+.asd-ctx { margin-left: auto; text-align: right; }
+@media (max-width: 640px) {
+  .asd-row { grid-template-columns: minmax(0, 1fr) 58px 54px !important; min-width: 0 !important; column-gap: 10px !important; }
+  .asd-row > :nth-child(n+4) { display: none !important; }
+}
+.asd-donut { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
+@media (max-width: 860px) { .asd-ctx { margin-left: 0; text-align: left; width: 100%; } }
+@media (max-width: 480px) { .asd-field, .asd-field .asd-select { width: 100% !important; min-width: 0 !important; } }
+`;
+
+const fieldLabel = {
+  display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em",
+  textTransform: "uppercase", color: COLORS.muted, marginBottom: 6
+};
+
+// ---------------------------------------------------------------------------
 // Small presentational pieces
 // ---------------------------------------------------------------------------
-function StatRow({ k, v }) {
+function StatRow({ k, v, last }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "7px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16,
+      fontSize: 13, padding: "9px 0", borderBottom: last ? "none" : `1px solid ${COLORS.border}`
+    }}>
       <span style={{ color: COLORS.muted }}>{k}</span>
-      <span style={{ fontFamily: MONO, fontWeight: 600, textAlign: "right" }}>{v}</span>
+      <span style={{ fontWeight: 600, textAlign: "right", ...NUM }}>{v}</span>
     </div>
   );
 }
 
-function Panel({ title, children }) {
+function Panel({ title, subtitle, children, style }) {
   return (
-    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+    <section style={{
+      background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+      padding: "18px 20px", marginBottom: 16, boxShadow: "0 1px 3px rgba(38,36,30,0.07)", ...style
+    }}>
       {title && (
-        <h2 style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: COLORS.muted, margin: "0 0 12px 0", fontWeight: 600 }}>
-          {title}
-        </h2>
+        <header style={{ marginBottom: 14 }}>
+          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 650, letterSpacing: "-0.005em", color: COLORS.text }}>{title}</h2>
+          {subtitle && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 3, lineHeight: 1.5 }}>{subtitle}</div>}
+        </header>
       )}
       {children}
+    </section>
+  );
+}
+
+function KpiCard({ label, value, unit, sub, accent }) {
+  return (
+    <div style={{
+      position: "relative", overflow: "hidden", background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+      padding: "18px 20px 16px", boxShadow: "0 1px 3px rgba(38,36,30,0.07)"
+    }}>
+      <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 8 }}>
+        <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1.1, letterSpacing: "-0.02em", ...NUM }}>{value}</span>
+        {unit && <span style={{ fontSize: 13, color: COLORS.muted, fontWeight: 500 }}>{unit}</span>}
+      </div>
+      <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 6, minHeight: 16 }}>{sub}</div>
     </div>
   );
 }
@@ -225,51 +293,60 @@ function Panel({ title, children }) {
 // ---------------------------------------------------------------------------
 const ROW_GRID = {
   display: "grid",
-  gridTemplateColumns: "minmax(140px, 1.5fr) 62px 52px minmax(90px, 1.6fr) 58px 92px",
-  gap: 10,
-  alignItems: "center"
+  gridTemplateColumns: "minmax(150px, 1.4fr) 64px 56px minmax(80px, 1.4fr) 64px 112px",
+  columnGap: 14,
+  alignItems: "center",
+  minWidth: 560
 };
 
 function BreakdownPanel({ rows, hasBalance }) {
-  const head = { fontFamily: MONO, fontSize: 10, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.08em" };
+  const head = { fontSize: 11, fontWeight: 600, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.07em" };
+  const right = { textAlign: "right", ...NUM };
   return (
-    <Panel title="All appliances — how much of the day each makes up">
-      <div style={{ ...ROW_GRID, paddingBottom: 6, borderBottom: `1px solid ${COLORS.border}` }}>
-        <span style={head}>Appliance</span>
-        <span style={{ ...head, textAlign: "right" }}>kWh</span>
-        <span style={{ ...head, textAlign: "right" }}>Share</span>
-        <span style={head} />
-        <span style={{ ...head, textAlign: "right" }}>Hours on</span>
-        <span style={{ ...head, textAlign: "right" }}>Peak</span>
+    <Panel title="Appliance breakdown" subtitle="How much of the day's energy each appliance accounts for">
+      <div style={{ overflowX: "auto" }}>
+        <div className="asd-row" style={{ ...ROW_GRID, padding: "0 0 10px", borderBottom: `1px solid ${COLORS.border}` }}>
+          <span style={head}>Appliance</span>
+          <span style={{ ...head, ...right }}>kWh</span>
+          <span style={{ ...head, ...right }}>Share</span>
+          <span style={head} />
+          <span style={{ ...head, ...right }}>Hours</span>
+          <span style={{ ...head, ...right }}>Peak</span>
+        </div>
+
+        {rows.map((r, i) => {
+          const idle = r.kwh < 0.005;
+          return (
+            <div key={r.key} className="asd-row" style={{
+              ...ROW_GRID, padding: "11px 0", opacity: idle ? 0.45 : 1,
+              borderBottom: i === rows.length - 1 ? "none" : `1px solid ${COLORS.border}`
+            }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, fontWeight: 600, minWidth: 0 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: r.color, flex: "0 0 auto" }} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                {r.kind === "estimated" && (
+                  <span style={{ fontSize: 10, fontWeight: 500, color: COLORS.muted, background: COLORS.soft, border: `1px solid ${COLORS.border}`, borderRadius: 4, padding: "1px 5px" }}>est.</span>
+                )}
+              </span>
+              <span style={{ fontSize: 13, ...right }}>{r.kwh.toFixed(2)}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, ...right }}>
+                {(r.share * 100).toFixed(r.share > 0 && r.share < 0.1 ? 1 : 0)}%
+              </span>
+              <span style={{ background: "#EFEBDF", borderRadius: 4, height: 8, overflow: "hidden" }}>
+                <span style={{ display: "block", height: "100%", background: r.color, borderRadius: 4, width: `${Math.max(r.share * 100, r.kwh > 0.005 ? 1.5 : 0)}%` }} />
+              </span>
+              <span style={{ fontSize: 12, color: COLORS.muted, ...right }}>
+                {r.count == null ? "—" : `${(r.count * 0.5).toFixed(1)} h`}
+              </span>
+              <span style={{ fontSize: 12, color: COLORS.muted, ...right }}>
+                {r.peakSlot && r.peakKw > 0 ? `${r.peakKw.toFixed(2)} kW · ${r.peakSlot.t}` : "—"}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
-      {rows.map((r) => {
-        const idle = r.kwh < 0.005;
-        return (
-          <div key={r.key} style={{ ...ROW_GRID, padding: "8px 0", borderBottom: `1px solid ${COLORS.border}`, opacity: idle ? 0.45 : 1 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 3, background: r.color, flex: "0 0 auto" }} />
-              {r.label}
-              {r.kind === "estimated" && <span style={{ fontFamily: MONO, fontSize: 9, color: COLORS.muted, fontWeight: 400 }}>est.</span>}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 12, textAlign: "right" }}>{r.kwh.toFixed(2)}</span>
-            <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, textAlign: "right" }}>
-              {(r.share * 100).toFixed(r.share > 0 && r.share < 0.1 ? 1 : 0)}%
-            </span>
-            <span style={{ background: "#F0ECE0", borderRadius: 4, height: 8, overflow: "hidden" }}>
-              <span style={{ display: "block", height: "100%", background: r.color, width: `${Math.max(r.share * 100, r.kwh > 0.005 ? 1.5 : 0)}%` }} />
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: COLORS.muted, textAlign: "right" }}>
-              {r.count == null ? "—" : `${(r.count * 0.5).toFixed(1)} h`}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: COLORS.muted, textAlign: "right" }}>
-              {r.peakSlot && r.peakKw > 0 ? `${r.peakKw.toFixed(2)}kW ${r.peakSlot.t}` : "—"}
-            </span>
-          </div>
-        );
-      })}
-
-      <div style={{ fontSize: 11, color: COLORS.muted, lineHeight: 1.6, marginTop: 10 }}>
+      <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.6, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` }}>
         {hasBalance
           ? "Induction, EV and AC are detected from the readings. Every other appliance (marked est.) is matched to what is left of the reading from its rating and its usual hours of the day - an estimate, not a measurement. Unexplained is whatever the meter read beyond everything matched."
           : "This output has no per-appliance balance, so only induction, EV and any equipment the model named are split out; Unexplained is everything else the meter read."}
@@ -284,17 +361,21 @@ function EquipCard({ row, hasBalance, inferredCount }) {
   const d = slot && slot.o ? slot.o[row.key] : null; // present when the MODEL named this equipment
   const idle = !slot || row.kwh < 0.005;
   return (
-    <details style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px", marginTop: 10, opacity: idle ? 0.55 : 1 }}>
-      <summary style={{ cursor: "pointer", listStyle: "none" }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{row.label} · on in {row.count} slot{row.count === 1 ? "" : "s"}</span>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: COLORS.muted, marginTop: 4 }}>
-          {idle ? "not on at any point in this view" : `peak ${slot.t} · ${row.peakKw.toFixed(2)}kW`}
+    <details className="asd-details" style={{ border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "11px 14px", marginTop: 10, opacity: idle ? 0.6 : 1, background: COLORS.soft }}>
+      <summary>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}>
+          <span style={{ width: 9, height: 9, borderRadius: 3, background: row.color, flex: "0 0 auto" }} />
+          <span style={{ flex: 1, minWidth: 0 }}>{row.label}</span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: COLORS.muted }}>{row.count} slot{row.count === 1 ? "" : "s"}</span>
+        </div>
+        <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 5, lineHeight: 1.5, ...NUM }}>
+          {idle ? "Not on at any point in this view" : `Peak ${row.peakKw.toFixed(2)} kW at ${slot.t}`}
           {d && d.n != null ? ` · ${d.n} unit${d.n === 1 ? "" : "s"}` : ""}
           {d && d.c != null ? ` · confidence ${d.c}` : ""}
-          {` · ${row.kwh.toFixed(2)} kWh · ${(row.share * 100).toFixed(1)}% of the day`}
+          {` · ${row.kwh.toFixed(2)} kWh (${(row.share * 100).toFixed(1)}%)`}
         </div>
       </summary>
-      <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 8, borderTop: `1px dashed ${COLORS.border}`, paddingTop: 8 }}>
+      <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 10, borderTop: `1px dashed ${COLORS.border}`, paddingTop: 10, color: COLORS.text }}>
         {d
           ? slot.r || "No reasoning recorded for this slot."
           : hasBalance
@@ -317,12 +398,41 @@ function DayWarningsPanel({ warnings }) {
   return (
     <Panel title={`Day-level warnings (${warnings.length})`}>
       {warnings.map((w, i) => (
-        <div key={i} style={{ fontSize: 12, lineHeight: 1.6, color: "#B84C4C", marginBottom: 6 }}>
-          ⚑ {w.date ? <b style={{ fontFamily: MONO }}>{w.date} </b> : null}
+        <div key={i} style={{
+          fontSize: 12, lineHeight: 1.6, color: "#8F3A3A", background: "#FBEFEE", border: "1px solid #F0D3D0",
+          borderRadius: 8, padding: "8px 10px", marginTop: i ? 8 : 0
+        }}>
+          {w.date ? <b style={NUM}>{w.date} · </b> : null}
           {w.text.replace(/^DAY-LEVEL FLAG:\s*/, "")}
         </div>
       ))}
     </Panel>
+  );
+}
+
+// Clickable legend: click to show only that appliance, click more to add them,
+// click a selected one to remove it, "Show all" to reset.
+function ChartLegend({ series, selected, onToggle, onClear }) {
+  const anySel = selected.length > 0;
+  return (
+    <div role="group" aria-label="Filter chart by appliance" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", paddingTop: 14 }}>
+      {series.map((s) => {
+        const isSel = selected.includes(s.name);
+        return (
+          <button key={s.name} type="button" className="asd-chip" aria-pressed={isSel} onClick={() => onToggle(s.name)}
+            style={{
+              opacity: anySel && !isSel ? 0.45 : 1,
+              borderColor: isSel ? s.color : undefined,
+              background: isSel ? `${s.color}1F` : undefined,
+              fontWeight: isSel ? 650 : 500
+            }}>
+            <span style={{ width: 9, height: 9, borderRadius: 3, background: s.color, flex: "0 0 auto" }} />
+            {s.name}
+          </button>
+        );
+      })}
+      {anySel && <button type="button" className="asd-link" onClick={onClear}>Show all</button>}
+    </div>
   );
 }
 
@@ -331,30 +441,38 @@ function LoadBarTooltip({ active, payload, label, series }) {
   const row = payload[0].payload;
 
   const parts = (series || [])
-    .map((s) => ({ name: s.name, v: row[s.name] || 0 }))
+    .map((s) => ({ name: s.name, color: s.color, v: row[s.name] || 0 }))
     .filter((p) => p.v > 0.004)
-    .sort((x, y) => y.v - x.v)
-    .map((p) => `${p.name} ${p.v.toFixed(2)}kW`)
-    .join(" · ");
+    .sort((x, y) => y.v - x.v);
 
   return (
-    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "10px 12px", maxWidth: 340, boxShadow: "0 2px 8px rgba(0,0,0,.08)" }}>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{label} · meter {row.actual.toFixed(2)}kW</div>
-      <div style={{ fontFamily: MONO, fontSize: 11, color: COLORS.muted, marginBottom: 6, lineHeight: 1.6 }}>{parts}</div>
+    <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "12px 14px", width: 320, boxShadow: "0 6px 20px rgba(38,36,30,.12)", fontFamily: SANS }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+        <span>{label}</span>
+        <span style={NUM}>{row.actual.toFixed(2)} kW</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", rowGap: 3, columnGap: 12, fontSize: 12 }}>
+        {parts.map((p) => (
+          <React.Fragment key={p.name}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, color: COLORS.text }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />{p.name}
+            </span>
+            <span style={{ textAlign: "right", color: COLORS.muted, ...NUM }}>{p.v.toFixed(2)} kW</span>
+          </React.Fragment>
+        ))}
+      </div>
       {row.inferred && row.inferred.length > 0 && (
-        <div style={{ fontSize: 11, color: COLORS.muted, marginBottom: 6 }}>
+        <div style={{ fontSize: 11, color: COLORS.muted, marginTop: 8 }}>
           {row.inferred.join(", ")} kW inferred from the reasoning text ("+ {row.inferred[0]}"), not stated by the model.
         </div>
       )}
       {row.capped && (
-        <div style={{ fontSize: 11, color: "#B84C4C", marginBottom: 6 }}>
-          Model claimed {row.claimed.toFixed(2)}kW in total — more than the meter read, so the bar is scaled to the reading.
+        <div style={{ fontSize: 11, color: "#8F3A3A", marginTop: 8 }}>
+          Model claimed {row.claimed.toFixed(2)} kW in total — more than the meter read, so the bar is scaled to the reading.
         </div>
       )}
-      {row.flagged && (
-        <div style={{ fontSize: 11, color: "#B84C4C", marginBottom: 6 }}>⚑ this slot has a model check flag</div>
-      )}
-      <div style={{ fontSize: 12, lineHeight: 1.5, borderTop: `1px dashed ${COLORS.border}`, paddingTop: 6 }}>{row.reasoning}</div>
+      {row.flagged && <div style={{ fontSize: 11, color: "#8F3A3A", marginTop: 8 }}>⚑ This slot has a model check flag</div>}
+      <div style={{ fontSize: 12, lineHeight: 1.5, borderTop: `1px solid ${COLORS.border}`, paddingTop: 8, marginTop: 10, color: COLORS.muted }}>{row.reasoning}</div>
     </div>
   );
 }
@@ -365,10 +483,11 @@ function LoadBarTooltip({ active, payload, label, series }) {
 export default function ApplianceAttributionDashboard() {
   const [consumers, setConsumers] = useState(INITIAL_CONSUMERS);
   const [scno, setScno] = useState(Object.keys(INITIAL_CONSUMERS)[0]);
-  const [day, setDay] = useState(Object.keys(INITIAL_CONSUMERS[Object.keys(INITIAL_CONSUMERS)[0]].days)[0]);
+  const [day, setDay] = useState(Object.keys(INITIAL_CONSUMERS[Object.keys(INITIAL_CONSUMERS)[0]].days).sort()[0]);
   const [fileError, setFileError] = useState(null);
+  const [picked, setPicked] = useState([]); // appliance names isolated in the chart legend
 
-  const dayOptions = Object.keys(consumers[scno].days);
+  const dayOptions = Object.keys(consumers[scno].days).sort();
   const equipment = consumers[scno].equipment || [];
 
   function handleFiles(fileList) {
@@ -394,8 +513,9 @@ export default function ApplianceAttributionDashboard() {
 
         setConsumers(next);
         if (lastScno) {
+          setPicked([]);
           setScno(lastScno);
-          setDay(Object.keys(next[lastScno].days)[0]);
+          setDay(Object.keys(next[lastScno].days).sort()[0]);
         }
         if (errors.length) setFileError(errors.join(" · "));
       })
@@ -403,9 +523,14 @@ export default function ApplianceAttributionDashboard() {
   }
 
   const slots = useMemo(() => {
-    if (day === "__all__") return Object.values(consumers[scno].days).flat();
+    if (day === "__all__") { const dd = consumers[scno].days; return Object.keys(dd).sort().flatMap((d) => dd[d]); }
     return consumers[scno].days[day] || [];
   }, [consumers, scno, day]);
+
+  const slotDates = useMemo(() => {
+    if (day === "__all__") { const dd = consumers[scno].days; return Object.keys(dd).sort().flatMap((d) => dd[d].map(() => d)); }
+    return slots.map(() => day);
+  }, [consumers, scno, day, slots]);
 
   const dayWarnings = useMemo(() => {
     const dw = consumers[scno].dayWarnings || {};
@@ -427,12 +552,19 @@ export default function ApplianceAttributionDashboard() {
     { name: "EV", color: COLORS.blue }
   ];
 
+  // keep only picks that exist in this view; none picked (or none valid) = show everything
+  const seriesNames = series.map((x) => x.name);
+  const selected = picked.filter((n) => seriesNames.includes(n));
+  const visibleSeries = selected.length ? series.filter((x) => selected.includes(x.name)) : series;
+  const togglePick = (name) => setPicked((cur) => (cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]));
+
   const donutData = rows.filter((r) => r.kwh > 0.004).map((r) => ({ name: r.label, value: r.kwh, color: r.color }));
 
-  const barData = slots.map((s) => {
+  const barData = slots.map((s, i) => {
     const sp = splitSlot(s);
     const row = {
       t: s.t,
+      x: day === "__all__" ? `${slotDates[i]} ${s.t}` : s.t,
       actual: s.k,
       claimed: sp.claimed,
       capped: sp.capped,
@@ -447,142 +579,163 @@ export default function ApplianceAttributionDashboard() {
     return row;
   });
 
+  // round y-axis ticks from the tallest stacked bar actually drawn (so a filter rescales cleanly)
+  const stackMax = Math.max(0.1, ...barData.map((r) => visibleSeries.reduce((t, x) => t + (r[x.name] || 0), 0)));
+  const yStep = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 50].find((st) => stackMax / st <= 6) || 100;
+  const yTicks = Array.from({ length: Math.ceil(stackMax / yStep - 1e-9) + 1 }, (_, i) => +(i * yStep).toFixed(2));
+
   const applianceRows = rows.filter((r) => r.key !== MISC_KEY);
   const largest = applianceRows.reduce((x, y) => (y.kwh > x.kwh ? y : x), applianceRows[0]);
   const activeCount = applianceRows.filter((r) => r.kwh > 0.004).length;
   const miscRow = rows.find((r) => r.key === MISC_KEY);
   const otherRows = rows.filter((r) => r.key !== "induction" && r.key !== "ev" && r.key !== MISC_KEY);
+  const indTime = timeLabel(a.indFirst, a.indLast);
+  const evTime = timeLabel(a.evFirst, a.evLast);
+  const dayLabel = day === "__all__" ? "All days combined" : day;
+  const peakIdx = slots.findIndex((s) => s.k === a.maxK);
+  const peakWhen = peakIdx < 0 ? "—" : day === "__all__" ? `${slotDates[peakIdx].slice(5)} ${slots[peakIdx].t}` : slots[peakIdx].t;
+  const allDayTicks = barData.filter((r) => r.t === "00:00").map((r) => r.x);
 
   function handleSelectConsumer(newScno) {
+    setPicked([]); // appliances differ between consumers, so start unfiltered
     setScno(newScno);
-    setDay(Object.keys(consumers[newScno].days)[0]);
+    setDay(Object.keys(consumers[newScno].days).sort()[0]);
   }
 
   return (
-    <div style={{ background: COLORS.bg, color: COLORS.text, fontFamily: "system-ui, -apple-system, sans-serif", minHeight: "100vh" }}>
-      <div style={{ maxWidth: 1240, margin: "0 auto", padding: 20 }}>
-        <header style={{ borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 16, marginBottom: 16 }}>
-          <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.16em", color: COLORS.teal, textTransform: "uppercase", marginBottom: 6 }}>
-            Load Signature Console
+    <div className="asd-root">
+      <style>{CSS}</style>
+      <div className="asd-wrap">
+        {/* ------------------------------------------------ header */}
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 20, flexWrap: "wrap", paddingBottom: 18, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.teal, marginBottom: 6 }}>Load Signature Console</div>
+            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em" }}>Appliance Attribution Dashboard</h1>
+            <p style={{ margin: "6px 0 0", fontSize: 14, color: COLORS.muted, maxWidth: 720, lineHeight: 1.55 }}>
+              Half-hourly meter readings split across every appliance in the consumer's survey, with whatever the meter read beyond them shown as unexplained.
+            </p>
           </div>
-          <h1 style={{ fontSize: 22, margin: 0, fontWeight: 700 }}>Appliance Attribution Dashboard</h1>
-          <div style={{ color: COLORS.muted, fontSize: 13, marginTop: 6, maxWidth: 760, lineHeight: 1.6 }}>
-            Half-hourly power readings split across every appliance in the consumer's survey — induction, EV, AC,
-            tube lights, fans, fridge, TV and the rest — with whatever the meter read beyond them shown as unexplained.
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <label htmlFor="consumer-file-input" className="asd-btn">Add consumer JSON</label>
+            <input id="consumer-file-input" type="file" accept="application/json,.json" multiple
+              onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
+            <span style={{ fontSize: 11, color: COLORS.muted }}>Accepts <code>results/&lt;scno&gt;.json</code> files</span>
           </div>
         </header>
+        {fileError && (
+          <div style={{ fontSize: 13, color: "#8F3A3A", background: "#FBEFEE", border: "1px solid #F0D3D0", borderRadius: 8, padding: "9px 12px", marginBottom: 16 }}>{fileError}</div>
+        )}
 
-        <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <label htmlFor="consumer-file-input" style={{ background: COLORS.teal, color: "#fff", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-            Add consumer JSON file(s)
-          </label>
-          <input id="consumer-file-input" type="file" accept="application/json,.json" multiple
-            onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
-          <span style={{ fontSize: 12, color: COLORS.muted }}>
-            Drop in one or more <code>results/&lt;scno&gt;.json</code> or <code>*_manual_filled_days.json</code> files —
-            each is parsed and added by its own <code>scno</code>, no code editing needed.
-          </span>
-          {fileError && <span style={{ fontSize: 12, color: "#B84C4C" }}>{fileError}</span>}
+        {/* ------------------------------------------------ selectors */}
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 18 }}>
+          <div className="asd-field">
+            <label htmlFor="consumer-select" style={fieldLabel}>Consumer</label>
+            <select id="consumer-select" className="asd-select" value={scno} onChange={(e) => handleSelectConsumer(e.target.value)} style={{ minWidth: 340 }}>
+              {Object.keys(consumers).map((id) => (
+                <option key={id} value={id}>{consumers[id].name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="asd-field">
+            <label htmlFor="day-select" style={fieldLabel}>Day</label>
+            <select id="day-select" className="asd-select" value={day} onChange={(e) => setDay(e.target.value)}>
+              {dayOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+              {dayOptions.length > 1 && <option value="__all__">All days (combined)</option>}
+            </select>
+          </div>
+          <div className="asd-ctx" style={{ paddingBottom: 2 }}>
+            <div style={{ fontSize: 15, fontWeight: 650 }}>{consumers[scno].name}</div>
+            <div style={{ fontSize: 12, color: COLORS.muted, ...NUM }}>Service no. {scno} · {dayLabel}</div>
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "16px 0" }}>
-          {Object.keys(consumers).map((id) => {
-            const active = id === scno;
-            return (
-              <button
-                key={id}
-                onClick={() => handleSelectConsumer(id)}
-                style={{
-                  fontFamily: MONO, fontSize: 12, fontWeight: 700, letterSpacing: "0.03em",
-                  padding: "9px 16px", borderRadius: 8, cursor: "pointer",
-                  border: `1px solid ${active ? COLORS.amber : COLORS.border}`,
-                  background: active ? COLORS.amber : COLORS.panel,
-                  color: active ? "#fff" : COLORS.text,
-                  whiteSpace: "nowrap"
-                }}
-              >
-                {consumers[id].name}
-              </button>
-            );
-          })}
+        {/* ------------------------------------------------ KPI row */}
+        <div className="asd-kpis">
+          <KpiCard label="Total energy" value={a.totalKwh.toFixed(1)} unit="kWh" accent={COLORS.teal}
+            sub={`${slots.length} half-hour readings`} />
+          <KpiCard label="Peak demand" value={a.maxK.toFixed(2)} unit="kW" accent="#8A8473"
+            sub={`at ${peakWhen} · low ${a.minK.toFixed(2)} kW`} />
+          <KpiCard label="Induction" value={a.indKwh.toFixed(2)} unit="kWh" accent={COLORS.amber}
+            sub={indTime ? `${a.indCount} slot${a.indCount === 1 ? "" : "s"} · ${indTime}` : "No activity detected"} />
+          <KpiCard label="EV charging" value={a.evKwh.toFixed(2)} unit="kWh" accent={COLORS.blue}
+            sub={evTime ? `${a.evCount} slot${a.evCount === 1 ? "" : "s"} · ${evTime}` : "No activity detected"} />
         </div>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "0 0 16px 0", alignItems: "center" }}>
-          <label style={{ fontFamily: MONO, fontSize: 11, color: COLORS.muted, textTransform: "uppercase", marginRight: 6 }}>Day</label>
-          <select value={day} onChange={(e) => setDay(e.target.value)} style={selectStyle}>
-            {dayOptions.map((d) => <option key={d} value={d}>{d}</option>)}
-            {dayOptions.length > 1 && <option value="__all__">All days (combined)</option>}
-          </select>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 16, alignItems: "start" }}>
-          <div>
-            <BreakdownPanel rows={rows} hasBalance={a.hasBalance} />
-
-            <Panel title="Energy split — every appliance vs. unexplained">
-              <div style={{ height: 280 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={donutData} dataKey="value" nameKey="name" innerRadius={60} outerRadius={95} paddingAngle={2}>
-                      {donutData.map((d) => <Cell key={d.name} fill={d.color} />)}
-                    </Pie>
-                    <Tooltip formatter={(v) => v.toFixed(2) + " kWh"} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
-
-            <Panel title="Half-hourly load — stacked by appliance">
+        {/* ------------------------------------------------ main grid */}
+        <div className="asd-grid">
+          <div style={{ minWidth: 0 }}>
+            <Panel title="Half-hourly load" subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={barData}>
+                  <BarChart data={barData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="#EFEBE0" vertical={false} />
-                    <XAxis dataKey="t" tick={{ fontSize: 9, fill: COLORS.muted }} interval={5} />
-                    <YAxis tick={{ fontSize: 10, fill: COLORS.muted }} label={{ value: "kW", angle: -90, position: "insideLeft", fill: COLORS.muted }} />
-                    <Tooltip content={<LoadBarTooltip series={series} />} />
-                    <Legend />
-                    {series.map((s) => <Bar key={s.name} dataKey={s.name} stackId="s" fill={s.color} radius={[1, 1, 0, 0]} />)}
+                    <XAxis dataKey="x" tick={{ fontSize: 11, fill: COLORS.muted }} {...(day === "__all__" ? { ticks: allDayTicks, interval: 0, tickFormatter: (v) => v.slice(5, 10) } : { ticks: ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"], interval: 0 })} tickLine={false} axisLine={{ stroke: COLORS.border }} />
+                    <YAxis ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} allowDecimals tick={{ fontSize: 11, fill: COLORS.muted }} tickLine={false} axisLine={false} width={44}
+                      label={{ value: "kW", angle: -90, position: "insideLeft", fill: COLORS.muted, fontSize: 11, offset: 12 }} />
+                    <Tooltip content={<LoadBarTooltip series={visibleSeries} />} cursor={{ fill: "rgba(38,36,30,0.04)" }} />
+                    {visibleSeries.map((s) => <Bar key={s.name} dataKey={s.name} stackId="s" fill={s.color} isAnimationActive={false} />)}
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              <ChartLegend series={series} selected={selected} onToggle={togglePick} onClear={() => setPicked([])} />
+            </Panel>
+
+            <BreakdownPanel rows={rows} hasBalance={a.hasBalance} />
+
+            <Panel title="Energy split" subtitle="Share of the day's kWh by appliance">
+              <div className="asd-donut">
+                <div style={{ position: "relative", width: 250, height: 250, flex: "0 0 auto", margin: "0 auto" }}>
+                  <PieChart width={250} height={250}>
+                    <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={78} outerRadius={115}
+                      paddingAngle={2} stroke="#fff" isAnimationActive={false}>
+                      {donutData.map((d) => <Cell key={d.name} fill={d.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(v) => v.toFixed(2) + " kWh"} />
+                  </PieChart>
+                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                    <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", ...NUM }}>{a.totalKwh.toFixed(1)}</span>
+                    <span style={{ fontSize: 12, color: COLORS.muted }}>kWh total</span>
+                  </div>
+                </div>
+                <div style={{ flex: "1 1 220px", minWidth: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", columnGap: 24, rowGap: 2 }}>
+                  {donutData.map((d) => (
+                    <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, padding: "6px 0" }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flex: "0 0 auto" }} />
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</span>
+                      <span style={{ fontWeight: 600, ...NUM }}>{a.totalKwh > 0 ? ((d.value / a.totalKwh) * 100).toFixed(d.value / a.totalKwh < 0.1 ? 1 : 0) : 0}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </Panel>
           </div>
 
-          <div>
+          <div style={{ minWidth: 0 }}>
             <Panel title="Day summary">
-              <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
-                <div style={{ fontFamily: MONO, fontSize: 30, fontWeight: 700, color: COLORS.teal }}>{a.totalKwh.toFixed(2)}</div>
-                <div style={{ fontSize: 11, color: COLORS.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginTop: 2 }}>
-                  Total kWh, {day === "__all__" ? "all days" : "this day"}
-                </div>
-              </div>
-              <StatRow k="Readings sampled" v={`${slots.length} half-hour slots`} />
-              <StatRow k="Power range" v={`${a.minK.toFixed(2)}–${a.maxK.toFixed(2)} kW`} />
+              <StatRow k="Readings sampled" v={`${slots.length} slots`} />
+              <StatRow k="Power range" v={`${a.minK.toFixed(2)} – ${a.maxK.toFixed(2)} kW`} />
               <StatRow k="Appliances on" v={`${activeCount} of ${applianceRows.length}`} />
-              <StatRow k="Largest appliance" v={`${largest.label} (${largest.kwh.toFixed(2)} kWh)`} />
+              <StatRow k="Largest appliance" v={`${largest.label} · ${largest.kwh.toFixed(2)} kWh`} />
               <StatRow k="Unexplained" v={`${miscRow.kwh.toFixed(2)} kWh (${(miscRow.share * 100).toFixed(0)}%)`} />
-              {a.cappedCount > 0 && <StatRow k="Claims above meter reading" v={`${a.cappedCount} slots (scaled down)`} />}
-              {a.flaggedCount > 0 && <StatRow k="Slots with a model flag" v={a.flaggedCount} />}
               <StatRow k="Induction events" v={a.indCount} />
-              {timeLabel(a.indFirst, a.indLast) && <StatRow k="Induction time" v={timeLabel(a.indFirst, a.indLast)} />}
-              {timeLabel(a.evFirst, a.evLast) && <StatRow k="EV time" v={timeLabel(a.evFirst, a.evLast)} />}
+              {indTime && <StatRow k="Induction time" v={indTime} />}
+              {evTime && <StatRow k="EV time" v={evTime} />}
+              {a.cappedCount > 0 && <StatRow k="Claims above meter reading" v={`${a.cappedCount} slots (scaled)`} />}
+              <StatRow k="Slots with a model flag" v={a.flaggedCount} last />
             </Panel>
 
             {equipment.length > 0 && (
-              <Panel title="Equipment on record">
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {equipment.map((eq) => (
-                    <span key={eq.label} style={{
-                      fontFamily: MONO, fontSize: 11, background: "#F0ECE0", color: COLORS.text,
-                      borderRadius: 6, padding: "4px 9px", border: `1px solid ${COLORS.border}`
+              <Panel title="Equipment on record" subtitle="From the household's equipment survey">
+                <div>
+                  {equipment.map((eq, i) => (
+                    <div key={eq.label} style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 13, padding: "9px 0",
+                      borderBottom: i === equipment.length - 1 ? "none" : `1px solid ${COLORS.border}`
                     }}>
-                      {eq.label} <b>× {eq.qty}</b>
-                    </span>
+                      <span>{eq.label}</span>
+                      <span style={{ fontWeight: 600, ...NUM }}>× {eq.qty}</span>
+                    </div>
                   ))}
-                </div>
-                <div style={{ fontSize: 11, color: COLORS.muted, lineHeight: 1.6, marginTop: 10 }}>
-                  From the household's equipment survey — the basis for every ceiling and estimate on this page.
                 </div>
               </Panel>
             )}
@@ -590,32 +743,27 @@ export default function ApplianceAttributionDashboard() {
             <DayWarningsPanel warnings={dayWarnings} />
 
             {otherRows.length > 0 && (
-              <Panel title={`Other appliances (${otherRows.length})`}>
+              <Panel title={`Other appliances (${otherRows.length})`} subtitle="Expand a row for detail">
                 {otherRows.map((r) => (
                   <EquipCard key={r.key} row={r} hasBalance={a.hasBalance} inferredCount={a.othInferred[r.key] || 0} />
                 ))}
               </Panel>
             )}
 
-            <Panel>
-              <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.6 }}>
-                <b style={{ color: COLORS.text }}>Reading these numbers:</b> each bar is one half-hour of the meter reading, split
-                across every appliance. Induction, EV and AC are detected from the readings; the rest are matched from each
-                appliance's rating and usual hours. "Unexplained" is whatever the meter read beyond all of them — it is not a
-                separate measured circuit.
+            <Panel title="Reading these numbers">
+              <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.65 }}>
+                Induction, EV and AC are detected from the readings; the rest are matched from each appliance's rating and usual hours.
+                "Unexplained" is whatever the meter read beyond all of them — it is not a separate measured circuit.
                 <br /><br />
-                <b style={{ color: COLORS.text }}>Scaled bars:</b> if a slot's claims add up to more than the meter read, the bar is
-                scaled to the reading and the tooltip shows what was originally claimed.
-                <br /><br />
-                <b style={{ color: COLORS.text }}>Flagged slots:</b> hover any bar in the chart above — a slot the automatic checks
-                flagged is marked directly in its tooltip.
+                If a slot's claims add up to more than the meter read, its bar is scaled to the reading and the tooltip shows what was
+                originally claimed. Slots the automatic checks flagged are marked in the tooltip.
               </div>
             </Panel>
           </div>
         </div>
 
-        <footer style={{ marginTop: 24, color: COLORS.muted, fontSize: 11, textAlign: "center", fontFamily: MONO }}>
-          LOAD SIGNATURE CONSOLE
+        <footer style={{ marginTop: 28, paddingTop: 16, borderTop: `1px solid ${COLORS.border}`, color: COLORS.muted, fontSize: 12, textAlign: "center" }}>
+          Load Signature Console
         </footer>
       </div>
     </div>
@@ -624,13 +772,3 @@ export default function ApplianceAttributionDashboard() {
 
 // exported for testing
 export { splitSlot, analyze, buildRows, applianceLabel, applianceColor };
-
-const selectStyle = {
-  background: COLORS.panel,
-  border: `1px solid ${COLORS.border}`,
-  color: COLORS.text,
-  borderRadius: 8,
-  padding: "8px 10px",
-  fontSize: 13,
-  minWidth: 200
-};
