@@ -20,6 +20,13 @@ const MISC_LABEL = "Unexplained";
 const MISC_KEY = "__unexplained";
 const ON_KW = 0.01; // an appliance counts as "on" in a slot above this
 
+// Which consumer / day opens first (falls back to the first consumer / day if not present)
+const DEFAULT_SCNO = "112206A806395345"; // NAVYA INFRACON PROJECTS PVT LTD
+const DEFAULT_DAY = "2026-07-02";
+const START_SCNO = INITIAL_CONSUMERS[DEFAULT_SCNO] ? DEFAULT_SCNO : Object.keys(INITIAL_CONSUMERS)[0];
+const START_DAYS = Object.keys(INITIAL_CONSUMERS[START_SCNO].days).sort();
+const START_DAY = START_DAYS.includes(DEFAULT_DAY) ? DEFAULT_DAY : START_DAYS[0];
+
 // ---------------------------------------------------------------------------
 // Appliance names and colors. Keys come from the pipeline's `balance`
 // ("ac", "fridge", "fan", "lighting:Tube light", "other:Television", ...) or, for
@@ -482,8 +489,8 @@ function LoadBarTooltip({ active, payload, label, series }) {
 // ---------------------------------------------------------------------------
 export default function ApplianceAttributionDashboard() {
   const [consumers, setConsumers] = useState(INITIAL_CONSUMERS);
-  const [scno, setScno] = useState(Object.keys(INITIAL_CONSUMERS)[0]);
-  const [day, setDay] = useState(Object.keys(INITIAL_CONSUMERS[Object.keys(INITIAL_CONSUMERS)[0]].days).sort()[0]);
+  const [scno, setScno] = useState(START_SCNO);
+  const [day, setDay] = useState(START_DAY);
   const [fileError, setFileError] = useState(null);
   const [picked, setPicked] = useState([]); // appliance names isolated in the chart legend
 
@@ -579,8 +586,8 @@ export default function ApplianceAttributionDashboard() {
     return row;
   });
 
-  // round y-axis ticks from the tallest stacked bar actually drawn (so a filter rescales cleanly)
-  const stackMax = Math.max(0.1, ...barData.map((r) => visibleSeries.reduce((t, x) => t + (r[x.name] || 0), 0)));
+  // round y-axis ticks from the tallest FULL stack, so the scale stays fixed when the legend filters
+  const stackMax = Math.max(0.1, ...barData.map((r) => series.reduce((t, x) => t + (r[x.name] || 0), 0)));
   const yStep = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 50].find((st) => stackMax / st <= 6) || 100;
   const yTicks = Array.from({ length: Math.ceil(stackMax / yStep - 1e-9) + 1 }, (_, i) => +(i * yStep).toFixed(2));
 
@@ -631,7 +638,7 @@ export default function ApplianceAttributionDashboard() {
           <div className="asd-field">
             <label htmlFor="consumer-select" style={fieldLabel}>Consumer</label>
             <select id="consumer-select" className="asd-select" value={scno} onChange={(e) => handleSelectConsumer(e.target.value)} style={{ minWidth: 340 }}>
-              {Object.keys(consumers).map((id) => (
+              {Object.keys(consumers).sort((x, y) => (x === DEFAULT_SCNO ? -1 : y === DEFAULT_SCNO ? 1 : 0)).map((id) => (
                 <option key={id} value={id}>{consumers[id].name}</option>
               ))}
             </select>
