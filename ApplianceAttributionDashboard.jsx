@@ -239,6 +239,12 @@ const CSS = `
 .asd-donut { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
 @media (max-width: 860px) { .asd-ctx { margin-left: 0; text-align: left; width: 100%; } }
 @media (max-width: 480px) { .asd-field, .asd-field .asd-select { width: 100% !important; min-width: 0 !important; } }
+.asd-seg { display: inline-flex; border: 1px solid ${COLORS.border}; border-radius: 8px; overflow: hidden; height: 40px; background: #fff; }
+.asd-seg button { border: 0; background: #fff; color: ${COLORS.text}; font: 600 13px ${SANS}; padding: 0 16px; cursor: pointer; }
+.asd-seg button + button { border-left: 1px solid ${COLORS.border}; }
+.asd-seg button:hover:not(:disabled) { background: ${COLORS.soft}; }
+.asd-seg button[aria-pressed='true'], .asd-seg button[aria-pressed='true']:hover:not(:disabled) { background: ${COLORS.teal}; color: #fff; }
+.asd-seg button:disabled { color: #B5B09F; cursor: not-allowed; }
 `;
 
 const fieldLabel = {
@@ -485,6 +491,69 @@ function LoadBarTooltip({ active, payload, label, series }) {
 }
 
 // ---------------------------------------------------------------------------
+// Version 2: the second possibility - what changed and why
+// ---------------------------------------------------------------------------
+const V2_STATUS = {
+  ambiguous: { text: "Second possibility", color: COLORS.amber },
+  better: { text: "Better fit", color: COLORS.teal },
+  limit: { text: "Limit", color: "#B84C4C" },
+  released: { text: "Released", color: "#B84C4C" },
+  filled: { text: "Leftover filled", color: COLORS.blue },
+  step: { text: "Open step", color: COLORS.muted },
+  same: { text: "Kept", color: COLORS.muted }
+};
+
+function V2Panel({ info }) {
+  if (!info) return null;
+  const st = info.stats || {};
+  const changed = (info.runs || []).filter((r) => r.status !== "same" && r.status !== "step");
+  const open = (info.runs || []).filter((r) => r.status === "step");
+  const kept = (info.runs || []).filter((r) => r.status === "same");
+  const rv1 = (st.residual_v1) || {}, rv2 = (st.residual_v2) || {};
+  const costText = (c) => Object.entries(c || {}).map(([k, v]) => `${k} ${v == null ? "not possible" : v.toFixed(2)}`).join(" · ");
+  const Row = ({ r }) => {
+    const m = V2_STATUS[r.status] || V2_STATUS.same;
+    return (
+      <div style={{ padding: "10px 0", borderBottom: `1px solid ${COLORS.border}` }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 650, ...NUM }}>{r.start}–{r.end} <span style={{ fontWeight: 500, color: COLORS.muted }}>· {r.v1} → {r.v2}</span></span>
+          <span style={{ fontSize: 11, fontWeight: 650, color: m.color, border: `1px solid ${m.color}`, borderRadius: 999, padding: "1px 8px" }}>{m.text}</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: COLORS.muted, marginTop: 4, lineHeight: 1.5 }}>{costText(r.costs)}{r.reason ? ` · ${r.reason}` : ""}</div>
+      </div>
+    );
+  };
+  return (
+    <Panel title="Version 2 · the second possibility" subtitle="Same energy as Version 1, reconsidered. Each stretch is scored as induction, AC and EV on shape, timing, size and daily limits (lower is better).">
+      <div style={{ fontSize: 12, color: COLORS.text, lineHeight: 1.6, marginBottom: 6 }}>
+        <b>{changed.length}</b> stretch{changed.length === 1 ? "" : "es"} read differently from Version 1, <b>{kept.length}</b> kept.
+        {" "}Leftover steps: {rv1.structured_runs ?? 0} → {rv2.structured_runs ?? 0} ({(rv1.structured_kwh ?? 0).toFixed(1)} → {(rv2.structured_kwh ?? 0).toFixed(1)} kWh).
+      </div>
+      {changed.length === 0 && <div style={{ fontSize: 12, color: COLORS.muted }}>Nothing was reconsidered: Version 1's readings were clearly the better fit.</div>}
+      {changed.map((r, i) => <Row key={`c${i}`} r={r} />)}
+      {open.length > 0 && (
+        <details className="asd-details" style={{ marginTop: 10 }}>
+          <summary style={{ fontSize: 12, fontWeight: 600, color: COLORS.muted }}>{open.length} leftover step{open.length === 1 ? "" : "s"} no label explains cleanly</summary>
+          {open.map((r, i) => <Row key={`o${i}`} r={r} />)}
+        </details>
+      )}
+      {kept.length > 0 && (
+        <details className="asd-details" style={{ marginTop: 6 }}>
+          <summary style={{ fontSize: 12, fontWeight: 600, color: COLORS.muted }}>{kept.length} kept as Version 1 read them</summary>
+          {kept.map((r, i) => <Row key={`k${i}`} r={r} />)}
+        </details>
+      )}
+      {(info.notes || []).length > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, marginBottom: 6 }}>Daily and event limits</div>
+          {info.notes.map((n, i) => <div key={i} style={{ fontSize: 12, lineHeight: 1.55, marginBottom: 5 }}>{n}</div>)}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function ApplianceAttributionDashboard() {
@@ -493,6 +562,7 @@ export default function ApplianceAttributionDashboard() {
   const [day, setDay] = useState(START_DAY);
   const [fileError, setFileError] = useState(null);
   const [picked, setPicked] = useState([]); // appliance names isolated in the chart legend
+  const [version, setVersion] = useState("v1"); // which reading of the day the charts show
 
   const dayOptions = Object.keys(consumers[scno].days).sort();
   const equipment = consumers[scno].equipment || [];
@@ -530,9 +600,17 @@ export default function ApplianceAttributionDashboard() {
   }
 
   const slots = useMemo(() => {
-    if (day === "__all__") { const dd = consumers[scno].days; return Object.keys(dd).sort().flatMap((d) => dd[d]); }
-    return consumers[scno].days[day] || [];
-  }, [consumers, scno, day]);
+    const c = consumers[scno];
+    const pick = (d) => (version === "v2" && c.daysV2 && c.daysV2[d]) ? c.daysV2[d] : c.days[d];
+    if (day === "__all__") return Object.keys(c.days).sort().flatMap((d) => pick(d));
+    return pick(day) || [];
+  }, [consumers, scno, day, version]);
+  const v2Days = consumers[scno].daysV2 || {};
+  const hasV2 = day === "__all__" ? Object.keys(v2Days).length > 0 : !!v2Days[day];
+  const showV2 = version === "v2" && hasV2;
+  const v2Info = day !== "__all__" && showV2 ? (consumers[scno].v2Info || {})[day] : null;
+  const v1Info = day !== "__all__" && hasV2 ? (consumers[scno].v2Info || {})[day] : null;
+  const v2Changed = v1Info && v1Info.stats ? (v1Info.stats.ambiguous || 0) + (v1Info.stats.better || 0) + (v1Info.stats.limit || 0) + (v1Info.stats.released || 0) + (v1Info.stats.filled || 0) : 0;
 
   const slotDates = useMemo(() => {
     if (day === "__all__") { const dd = consumers[scno].days; return Object.keys(dd).sort().flatMap((d) => dd[d].map(() => d)); }
@@ -650,6 +728,14 @@ export default function ApplianceAttributionDashboard() {
               {dayOptions.length > 1 && <option value="__all__">All days (combined)</option>}
             </select>
           </div>
+          <div className="asd-field">
+            <span style={fieldLabel}>Reading</span>
+            <div className="asd-seg" role="group" aria-label="Choose the reading of the day">
+              <button type="button" aria-pressed={!showV2} onClick={() => setVersion("v1")}>Version 1</button>
+              <button type="button" aria-pressed={showV2} disabled={!hasV2} onClick={() => setVersion("v2")}
+                title={hasV2 ? "The second possibility" : "Version 2 has not been generated for this day"}>Version 2</button>
+            </div>
+          </div>
           <div className="asd-ctx" style={{ paddingBottom: 2 }}>
             <div style={{ fontSize: 15, fontWeight: 650 }}>{consumers[scno].name}</div>
             <div style={{ fontSize: 12, color: COLORS.muted, ...NUM }}>Service no. {scno} · {dayLabel}</div>
@@ -671,7 +757,7 @@ export default function ApplianceAttributionDashboard() {
         {/* ------------------------------------------------ main grid */}
         <div className="asd-grid">
           <div style={{ minWidth: 0 }}>
-            <Panel title="Half-hourly load" subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
+            <Panel title={showV2 ? "Half-hourly load · Version 2" : "Half-hourly load"} subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={barData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
@@ -718,6 +804,7 @@ export default function ApplianceAttributionDashboard() {
           </div>
 
           <div style={{ minWidth: 0 }}>
+            {v2Info && <V2Panel info={v2Info} />}
             <Panel title="Day summary">
               <StatRow k="Readings sampled" v={`${slots.length} slots`} />
               <StatRow k="Power range" v={`${a.minK.toFixed(2)} – ${a.maxK.toFixed(2)} kW`} />
