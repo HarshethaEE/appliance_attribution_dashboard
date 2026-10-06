@@ -236,7 +236,6 @@ const CSS = `
   .asd-row { grid-template-columns: minmax(0, 1fr) 58px 54px !important; min-width: 0 !important; column-gap: 10px !important; }
   .asd-row > :nth-child(n+4) { display: none !important; }
 }
-.asd-donut { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
 @media (max-width: 860px) { .asd-ctx { margin-left: 0; text-align: left; width: 100%; } }
 @media (max-width: 480px) { .asd-field, .asd-field .asd-select { width: 100% !important; min-width: 0 !important; } }
 .asd-seg { display: inline-flex; border: 1px solid ${COLORS.border}; border-radius: 8px; overflow: hidden; height: 40px; background: #fff; }
@@ -306,24 +305,36 @@ function KpiCard({ label, value, unit, sub, accent }) {
 // ---------------------------------------------------------------------------
 const ROW_GRID = {
   display: "grid",
-  gridTemplateColumns: "minmax(150px, 1.4fr) 64px 56px minmax(80px, 1.4fr) 64px 112px",
+  gridTemplateColumns: "minmax(150px, 1.4fr) 64px 56px minmax(80px, 1.4fr) 112px",
   columnGap: 14,
   alignItems: "center",
-  minWidth: 560
+  minWidth: 500
 };
 
-function BreakdownPanel({ rows, hasBalance }) {
+function BreakdownPanel({ rows, hasBalance, donutData, totalKwh }) {
   const head = { fontSize: 11, fontWeight: 600, color: COLORS.muted, textTransform: "uppercase", letterSpacing: "0.07em" };
   const right = { textAlign: "right", ...NUM };
   return (
     <Panel title="Appliance breakdown" subtitle="How much of the day's energy each appliance accounts for">
+      <div style={{ position: "relative", width: 250, height: 250, margin: "4px auto 18px" }}>
+        <PieChart width={250} height={250}>
+          <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={78} outerRadius={115}
+            paddingAngle={2} stroke="#fff" isAnimationActive={false}>
+            {donutData.map((d) => <Cell key={d.name} fill={d.color} />)}
+          </Pie>
+          <Tooltip formatter={(v) => v.toFixed(2) + " kWh"} />
+        </PieChart>
+        <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+          <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", ...NUM }}>{totalKwh.toFixed(1)}</span>
+          <span style={{ fontSize: 12, color: COLORS.muted }}>kWh total</span>
+        </div>
+      </div>
       <div style={{ overflowX: "auto" }}>
         <div className="asd-row" style={{ ...ROW_GRID, padding: "0 0 10px", borderBottom: `1px solid ${COLORS.border}` }}>
           <span style={head}>Appliance</span>
           <span style={{ ...head, ...right }}>kWh</span>
           <span style={{ ...head, ...right }}>Share</span>
           <span style={head} />
-          <span style={{ ...head, ...right }}>Hours</span>
           <span style={{ ...head, ...right }}>Peak</span>
         </div>
 
@@ -349,9 +360,6 @@ function BreakdownPanel({ rows, hasBalance }) {
                 <span style={{ display: "block", height: "100%", background: r.color, borderRadius: 4, width: `${Math.max(r.share * 100, r.kwh > 0.005 ? 1.5 : 0)}%` }} />
               </span>
               <span style={{ fontSize: 12, color: COLORS.muted, ...right }}>
-                {r.count == null ? "—" : `${(r.count * 0.5).toFixed(1)} h`}
-              </span>
-              <span style={{ fontSize: 12, color: COLORS.muted, ...right }}>
                 {r.peakSlot && r.peakKw > 0 ? `${r.peakKw.toFixed(2)} kW · ${r.peakSlot.t}` : "—"}
               </span>
             </div>
@@ -364,61 +372,6 @@ function BreakdownPanel({ rows, hasBalance }) {
           ? "Induction, EV and AC are detected from the readings. Every other appliance (marked est.) is matched to what is left of the reading from its rating and its usual hours of the day - an estimate, not a measurement. Unexplained is whatever the meter read beyond everything matched."
           : "This output has no per-appliance balance, so only induction, EV and any equipment the model named are split out; Unexplained is everything else the meter read."}
       </div>
-    </Panel>
-  );
-}
-
-// One card per appliance other than induction / EV - reasoning folded in directly
-function EquipCard({ row, hasBalance, inferredCount }) {
-  const slot = row.peakSlot;
-  const d = slot && slot.o ? slot.o[row.key] : null; // present when the MODEL named this equipment
-  const idle = !slot || row.kwh < 0.005;
-  return (
-    <details className="asd-details" style={{ border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "11px 14px", marginTop: 10, opacity: idle ? 0.6 : 1, background: COLORS.soft }}>
-      <summary>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}>
-          <span style={{ width: 9, height: 9, borderRadius: 3, background: row.color, flex: "0 0 auto" }} />
-          <span style={{ flex: 1, minWidth: 0 }}>{row.label}</span>
-          <span style={{ fontSize: 12, fontWeight: 500, color: COLORS.muted }}>{row.count} slot{row.count === 1 ? "" : "s"}</span>
-        </div>
-        <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 5, lineHeight: 1.5, ...NUM }}>
-          {idle ? "Not on at any point in this view" : `Peak ${row.peakKw.toFixed(2)} kW at ${slot.t}`}
-          {d && d.n != null ? ` · ${d.n} unit${d.n === 1 ? "" : "s"}` : ""}
-          {d && d.c != null ? ` · confidence ${d.c}` : ""}
-          {` · ${row.kwh.toFixed(2)} kWh (${(row.share * 100).toFixed(1)}%)`}
-        </div>
-      </summary>
-      <div style={{ fontSize: 12, lineHeight: 1.6, marginTop: 10, borderTop: `1px dashed ${COLORS.border}`, paddingTop: 10, color: COLORS.text }}>
-        {d
-          ? slot.r || "No reasoning recorded for this slot."
-          : hasBalance
-            ? "Matched from this appliance's rating and its usual hours of the day, after induction, EV and AC. An estimate, not a measurement."
-            : "No detail recorded."}
-        {inferredCount > 0 && (
-          <div style={{ marginTop: 8, color: COLORS.muted }}>
-            {inferredCount} of these slot{inferredCount === 1 ? "" : "s"} only say "+ {row.label}" in the reasoning text —
-            the kW shown is the part of the reading left after induction/EV, not a figure the model stated.
-          </div>
-        )}
-      </div>
-    </details>
-  );
-}
-
-// Day-level warnings from the pipeline (e.g. an over-matched day)
-function DayWarningsPanel({ warnings }) {
-  if (!warnings.length) return null;
-  return (
-    <Panel title={`Day-level warnings (${warnings.length})`}>
-      {warnings.map((w, i) => (
-        <div key={i} style={{
-          fontSize: 12, lineHeight: 1.6, color: "#8F3A3A", background: "#FBEFEE", border: "1px solid #F0D3D0",
-          borderRadius: 8, padding: "8px 10px", marginTop: i ? 8 : 0
-        }}>
-          {w.date ? <b style={NUM}>{w.date} · </b> : null}
-          {w.text.replace(/^DAY-LEVEL FLAG:\s*/, "")}
-        </div>
-      ))}
     </Panel>
   );
 }
@@ -617,14 +570,6 @@ export default function ApplianceAttributionDashboard() {
     return slots.map(() => day);
   }, [consumers, scno, day, slots]);
 
-  const dayWarnings = useMemo(() => {
-    const dw = consumers[scno].dayWarnings || {};
-    if (day === "__all__") {
-      return Object.entries(dw).flatMap(([date, list]) => list.map((text) => ({ date, text })));
-    }
-    return (dw[day] || []).map((text) => ({ date: null, text }));
-  }, [consumers, scno, day]);
-
   const a = useMemo(() => analyze(slots), [slots]);
   const rows = useMemo(() => buildRows(a), [a]);
 
@@ -673,7 +618,6 @@ export default function ApplianceAttributionDashboard() {
   const largest = applianceRows.reduce((x, y) => (y.kwh > x.kwh ? y : x), applianceRows[0]);
   const activeCount = applianceRows.filter((r) => r.kwh > 0.004).length;
   const miscRow = rows.find((r) => r.key === MISC_KEY);
-  const otherRows = rows.filter((r) => r.key !== "induction" && r.key !== "ev" && r.key !== MISC_KEY);
   const indTime = timeLabel(a.indFirst, a.indLast);
   const evTime = timeLabel(a.evFirst, a.evLast);
   const dayLabel = day === "__all__" ? "All days combined" : day;
@@ -773,34 +717,8 @@ export default function ApplianceAttributionDashboard() {
               <ChartLegend series={series} selected={selected} onToggle={togglePick} onClear={() => setPicked([])} />
             </Panel>
 
-            <BreakdownPanel rows={rows} hasBalance={a.hasBalance} />
+            <BreakdownPanel rows={rows} hasBalance={a.hasBalance} donutData={donutData} totalKwh={a.totalKwh} />
 
-            <Panel title="Energy split" subtitle="Share of the day's kWh by appliance">
-              <div className="asd-donut">
-                <div style={{ position: "relative", width: 250, height: 250, flex: "0 0 auto", margin: "0 auto" }}>
-                  <PieChart width={250} height={250}>
-                    <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={78} outerRadius={115}
-                      paddingAngle={2} stroke="#fff" isAnimationActive={false}>
-                      {donutData.map((d) => <Cell key={d.name} fill={d.color} />)}
-                    </Pie>
-                    <Tooltip formatter={(v) => v.toFixed(2) + " kWh"} />
-                  </PieChart>
-                  <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-                    <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", ...NUM }}>{a.totalKwh.toFixed(1)}</span>
-                    <span style={{ fontSize: 12, color: COLORS.muted }}>kWh total</span>
-                  </div>
-                </div>
-                <div style={{ flex: "1 1 220px", minWidth: 0, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", columnGap: 24, rowGap: 2 }}>
-                  {donutData.map((d) => (
-                    <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 13, padding: "6px 0" }}>
-                      <span style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flex: "0 0 auto" }} />
-                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</span>
-                      <span style={{ fontWeight: 600, ...NUM }}>{a.totalKwh > 0 ? ((d.value / a.totalKwh) * 100).toFixed(d.value / a.totalKwh < 0.1 ? 1 : 0) : 0}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </Panel>
           </div>
 
           <div style={{ minWidth: 0 }}>
@@ -831,16 +749,6 @@ export default function ApplianceAttributionDashboard() {
                     </div>
                   ))}
                 </div>
-              </Panel>
-            )}
-
-            <DayWarningsPanel warnings={dayWarnings} />
-
-            {otherRows.length > 0 && (
-              <Panel title={`Other appliances (${otherRows.length})`} subtitle="Expand a row for detail">
-                {otherRows.map((r) => (
-                  <EquipCard key={r.key} row={r} hasBalance={a.hasBalance} inferredCount={a.othInferred[r.key] || 0} />
-                ))}
               </Panel>
             )}
 
