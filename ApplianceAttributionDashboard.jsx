@@ -637,12 +637,15 @@ export default function ApplianceAttributionDashboard() {
       <div className="asd-wrap">
         {/* ------------------------------------------------ header */}
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 20, flexWrap: "wrap", paddingBottom: 18, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: COLORS.teal, marginBottom: 6 }}>Load Signature Console</div>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em" }}>Appliance Attribution Dashboard</h1>
-            <p style={{ margin: "6px 0 0", fontSize: 14, color: COLORS.muted, maxWidth: 720, lineHeight: 1.55 }}>
-              Half-hourly meter readings split across every appliance in the consumer's survey, with whatever the meter read beyond them shown as unexplained.
-            </p>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
+            <img src="/logo-full.png" alt="" aria-hidden="true" style={{ width: 128, height: 72, objectFit: "contain", flexShrink: 0 }} />
+            <div>
+              
+              <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em" }}>Appliance Attribution Dashboard</h1>
+              <p style={{ margin: "6px 0 0", fontSize: 14, color: COLORS.muted, maxWidth: 720, lineHeight: 1.55 }}>
+                Half-hourly meter readings split across every appliance in the consumer's survey, with whatever the meter read beyond them shown as unexplained.
+              </p>
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
             <label htmlFor="consumer-file-input" className="asd-btn">Add consumer JSON</label>
