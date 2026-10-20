@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from "recharts";
-import { INITIAL_CONSUMERS, mergeConsumer } from "./consumerData";
+import { INITIAL_CONSUMERS, mergeConsumer, mergeConsumerV3 } from "./consumerData";
 
 // ---------------------------------------------------------------------------
 // Colors (light theme) - matches the companion Consumer Load Analyzer app
@@ -23,8 +23,25 @@ const ON_KW = 0.01; // an appliance counts as "on" in a slot above this
 // Which consumer / day opens first (falls back to the first consumer / day if not present)
 const DEFAULT_SCNO = "112206A806395345"; // NAVYA INFRACON PROJECTS PVT LTD
 const DEFAULT_DAY = "2026-07-02";
+// Every date a consumer has any reading for: Version 1 (and 2) days plus Version 3 days,
+// which are often different dates.
+const allDays = (c) => [...new Set([...Object.keys(c.days || {}), ...Object.keys(c.daysV3 || {})])].sort();
+
+const VERSIONS = [
+  { id: "v1", label: "Version 1" },
+  { id: "v2", label: "Version 2", hint: "The second possibility" },
+  { id: "v3", label: "Version 3", hint: "A separate run over its own 14 days" }
+];
+const versionLabel = (id) => VERSIONS.find((v) => v.id === id).label;
+
+// Which readings exist for a day ("__all__" = any day of the consumer)
+function versionsFor(c, day) {
+  const has = (map) => (day === "__all__" ? Object.keys(map || {}).length > 0 : !!(map && map[day]));
+  return { v1: has(c.days), v2: has(c.daysV2), v3: has(c.daysV3) };
+}
+
 const START_SCNO = INITIAL_CONSUMERS[DEFAULT_SCNO] ? DEFAULT_SCNO : Object.keys(INITIAL_CONSUMERS)[0];
-const START_DAYS = Object.keys(INITIAL_CONSUMERS[START_SCNO].days).sort();
+const START_DAYS = allDays(INITIAL_CONSUMERS[START_SCNO]);
 const START_DAY = START_DAYS.includes(DEFAULT_DAY) ? DEFAULT_DAY : START_DAYS[0];
 
 // ---------------------------------------------------------------------------
@@ -45,7 +62,10 @@ const APPLIANCE_META = {
   mixer:             { label: "Mixer",           color: "#5B9A4E" },
   grinder:           { label: "Grinder",         color: "#A8724E" },
   "washing machine": { label: "Washing machine", color: "#4E8FA8" },
-  motor:             { label: "Motor / pump",    color: "#C7647A" }
+  motor:             { label: "Motor / pump",    color: "#C7647A" },
+  geyser:            { label: "Water heater",    color: "#E07B39" },
+  iron:              { label: "Iron box",        color: "#9C6ADE" },
+  rice_cooker:       { label: "Rice cooker / kettle", color: "#B5A33A" }
 };
 const FALLBACK_PALETTE = ["#8A6B4E", "#6B8E23", "#B0598B", "#3D8B9E", "#A8902F", "#7A7FB5"];
 
@@ -437,7 +457,11 @@ function LoadBarTooltip({ active, payload, label, series }) {
           Model claimed {row.claimed.toFixed(2)} kW in total — more than the meter read, so the bar is scaled to the reading.
         </div>
       )}
-      {row.flagged && <div style={{ fontSize: 11, color: "#8F3A3A", marginTop: 8 }}>⚑ This slot has a model check flag</div>}
+      {row.flags.length > 0 && (
+        <div style={{ fontSize: 11, color: "#8F3A3A", marginTop: 8, lineHeight: 1.5 }}>
+          {row.flags.map((f, i) => <div key={i}>⚑ {f}</div>)}
+        </div>
+      )}
       <div style={{ fontSize: 12, lineHeight: 1.5, borderTop: `1px solid ${COLORS.border}`, paddingTop: 8, marginTop: 10, color: COLORS.muted }}>{row.reasoning}</div>
     </div>
   );
@@ -477,7 +501,7 @@ function V2Panel({ info }) {
     );
   };
   return (
-    <Panel title="Version 2 · the second possibility" subtitle="Same energy as Version 1, reconsidered. Each stretch is scored as induction, AC and EV on shape, timing, size and daily limits (lower is better).">
+    <Panel title="Version 2 · the second possibility" subtitle="Same energy as Version 1, reconsidered. Each stretch is tested against every appliance it could be (surveyed ones, plus a water heater, iron box, rice cooker/kettle or EV charger the survey does not list) on size, duration, time of day and daily limits. Fit penalty 0-1, lower is better; unsurveyed appliances carry an extra 0.2.">
       <div style={{ fontSize: 12, color: COLORS.text, lineHeight: 1.6, marginBottom: 6 }}>
         <b>{changed.length}</b> stretch{changed.length === 1 ? "" : "es"} read differently from Version 1, <b>{kept.length}</b> kept.
         {" "}Leftover steps: {rv1.structured_runs ?? 0} → {rv2.structured_runs ?? 0} ({(rv1.structured_kwh ?? 0).toFixed(1)} → {(rv2.structured_kwh ?? 0).toFixed(1)} kWh).
@@ -498,7 +522,7 @@ function V2Panel({ info }) {
       )}
       {(info.notes || []).length > 0 && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${COLORS.border}` }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, marginBottom: 6 }}>Daily and event limits</div>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: COLORS.muted, marginBottom: 6 }}>Notes and limits</div>
           {info.notes.map((n, i) => <div key={i} style={{ fontSize: 12, lineHeight: 1.55, marginBottom: 5 }}>{n}</div>)}
         </div>
       )}
@@ -515,10 +539,35 @@ export default function ApplianceAttributionDashboard() {
   const [day, setDay] = useState(START_DAY);
   const [fileError, setFileError] = useState(null);
   const [picked, setPicked] = useState([]); // appliance names isolated in the chart legend
-  const [version, setVersion] = useState("v1"); // which reading of the day the charts show
+  const [version, setVersion] = useState("v1"); // which reading of the day the charts show (preferred)
 
-  const dayOptions = Object.keys(consumers[scno].days).sort();
-  const equipment = consumers[scno].equipment || [];
+  // Load Version 3 separately so its large dataset does not slow the initial JS bundle.
+  // Versions 1 and 2 render first; Version 3 becomes available automatically when loaded.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/consumerDataV3.json")
+      .then((response) => {
+        if (!response.ok) throw new Error(`Could not load consumerDataV3.json (${response.status})`);
+        return response.json();
+      })
+      .then((rawV3) => {
+        if (cancelled) return;
+        const rows = Array.isArray(rawV3) ? rawV3 : [rawV3];
+        setConsumers((current) => rows.reduce((next, raw) => mergeConsumerV3(next, raw), current));
+      })
+      .catch((err) => {
+        if (!cancelled) setFileError(`Version 3 data could not be loaded: ${err.message}`);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const consumer = consumers[scno];
+  const dayOptions = allDays(consumer);
+  const equipment = consumer.equipment || [];
+
+  // The preferred version when this day has it, otherwise whichever reading the day does have
+  const available = versionsFor(consumer, day);
+  const view = available[version] ? version : ["v1", "v3", "v2"].find((v) => available[v]) || "v1";
 
   function handleFiles(fileList) {
     setFileError(null);
@@ -545,30 +594,27 @@ export default function ApplianceAttributionDashboard() {
         if (lastScno) {
           setPicked([]);
           setScno(lastScno);
-          setDay(Object.keys(next[lastScno].days).sort()[0]);
+          setDay(allDays(next[lastScno])[0]);
         }
         if (errors.length) setFileError(errors.join(" · "));
       })
       .catch((err) => setFileError(err.message || "Could not read the selected file(s)."));
   }
 
-  const slots = useMemo(() => {
+  // the slots of the shown reading, and the date each slot belongs to
+  const { slots, slotDates } = useMemo(() => {
     const c = consumers[scno];
-    const pick = (d) => (version === "v2" && c.daysV2 && c.daysV2[d]) ? c.daysV2[d] : c.days[d];
-    if (day === "__all__") return Object.keys(c.days).sort().flatMap((d) => pick(d));
-    return pick(day) || [];
-  }, [consumers, scno, day, version]);
-  const v2Days = consumers[scno].daysV2 || {};
-  const hasV2 = day === "__all__" ? Object.keys(v2Days).length > 0 : !!v2Days[day];
-  const showV2 = version === "v2" && hasV2;
-  const v2Info = day !== "__all__" && showV2 ? (consumers[scno].v2Info || {})[day] : null;
-  const v1Info = day !== "__all__" && hasV2 ? (consumers[scno].v2Info || {})[day] : null;
-  const v2Changed = v1Info && v1Info.stats ? (v1Info.stats.ambiguous || 0) + (v1Info.stats.better || 0) + (v1Info.stats.limit || 0) + (v1Info.stats.released || 0) + (v1Info.stats.filled || 0) : 0;
-
-  const slotDates = useMemo(() => {
-    if (day === "__all__") { const dd = consumers[scno].days; return Object.keys(dd).sort().flatMap((d) => dd[d].map(() => d)); }
-    return slots.map(() => day);
-  }, [consumers, scno, day, slots]);
+    const source = view === "v3" ? (c.daysV3 || {}) : c.days;
+    const pick = (d) => (view === "v2" && c.daysV2 && c.daysV2[d]) ? c.daysV2[d] : (source[d] || []);
+    const dates = day === "__all__" ? Object.keys(source).sort() : [day];
+    const list = dates.flatMap((d) => pick(d));
+    return { slots: list, slotDates: dates.flatMap((d) => pick(d).map(() => d)) };
+  }, [consumers, scno, day, view]);
+  const showV2 = view === "v2";
+  // the day's pipeline warnings: Version 3 has its own, Version 1 and 2 share Version 1's
+  const warnings = day === "__all__" ? []
+    : ((view === "v3" ? consumer.v3Warnings : consumer.dayWarnings) || {})[day] || [];
+  const v2Info = day !== "__all__" && showV2 ? (consumer.v2Info || {})[day] : null;
 
   const a = useMemo(() => analyze(slots), [slots]);
   const rows = useMemo(() => buildRows(a), [a]);
@@ -598,7 +644,7 @@ export default function ApplianceAttributionDashboard() {
       actual: s.k,
       claimed: sp.claimed,
       capped: sp.capped,
-      flagged: hasFlags(s),
+      flags: hasFlags(s) ? s.fl : [],
       inferred: Object.keys(s.o || {}).filter((key) => s.o[key].inferred).map(applianceLabel),
       [MISC_LABEL]: sp.misc,
       Induction: sp.ind,
@@ -628,8 +674,16 @@ export default function ApplianceAttributionDashboard() {
   function handleSelectConsumer(newScno) {
     setPicked([]); // appliances differ between consumers, so start unfiltered
     setScno(newScno);
-    setDay(Object.keys(consumers[newScno].days).sort()[0]);
+    const c = consumers[newScno];
+    setDay(allDays(c)[0]);
+    if (!Object.keys(c.days || {}).length && Object.keys(c.daysV3 || {}).length) setVersion("v3");
   }
+
+  // "2026-05-03 · V3" - which readings each date in the dropdown has
+  const dayOptionLabel = (d) => {
+    const v = versionsFor(consumer, d);
+    return `${d} · ${VERSIONS.filter((x) => v[x.id]).map((x) => x.id.toUpperCase()).join(", ")}`;
+  };
 
   return (
     <div className="asd-root">
@@ -648,10 +702,12 @@ export default function ApplianceAttributionDashboard() {
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-            <label htmlFor="consumer-file-input" className="asd-btn">Add consumer JSON</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <label htmlFor="consumer-file-input" className="asd-btn">Add consumer JSON</label>
+            </div>
             <input id="consumer-file-input" type="file" accept="application/json,.json" multiple
               onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
-            <span style={{ fontSize: 11, color: COLORS.muted }}>Accepts <code>results/&lt;scno&gt;.json</code> files</span>
+            <span style={{ fontSize: 11, color: COLORS.muted }}>Version 3 data loads automatically from <code>public/consumerDataV3.json</code>.</span>
           </div>
         </header>
         {fileError && (
@@ -671,21 +727,22 @@ export default function ApplianceAttributionDashboard() {
           <div className="asd-field">
             <label htmlFor="day-select" style={fieldLabel}>Day</label>
             <select id="day-select" className="asd-select" value={day} onChange={(e) => setDay(e.target.value)}>
-              {dayOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+              {dayOptions.map((d) => <option key={d} value={d}>{dayOptionLabel(d)}</option>)}
               {dayOptions.length > 1 && <option value="__all__">All days (combined)</option>}
             </select>
           </div>
           <div className="asd-field">
             <span style={fieldLabel}>Reading</span>
             <div className="asd-seg" role="group" aria-label="Choose the reading of the day">
-              <button type="button" aria-pressed={!showV2} onClick={() => setVersion("v1")}>Version 1</button>
-              <button type="button" aria-pressed={showV2} disabled={!hasV2} onClick={() => setVersion("v2")}
-                title={hasV2 ? "The second possibility" : "Version 2 has not been generated for this day"}>Version 2</button>
+              {VERSIONS.map((v) => (
+                <button key={v.id} type="button" aria-pressed={view === v.id} disabled={!available[v.id]} onClick={() => setVersion(v.id)}
+                  title={available[v.id] ? (v.hint || v.label) : `${v.label} has not been generated for this day`}>{v.label}</button>
+              ))}
             </div>
           </div>
           <div className="asd-ctx" style={{ paddingBottom: 2 }}>
-            <div style={{ fontSize: 15, fontWeight: 650 }}>{consumers[scno].name}</div>
-            <div style={{ fontSize: 12, color: COLORS.muted, ...NUM }}>Service no. {scno} · {dayLabel}</div>
+            <div style={{ fontSize: 15, fontWeight: 650 }}>{consumer.name}</div>
+            <div style={{ fontSize: 12, color: COLORS.muted, ...NUM }}>Service no. {scno} · {dayLabel} · {versionLabel(view)}</div>
           </div>
         </div>
 
@@ -704,7 +761,7 @@ export default function ApplianceAttributionDashboard() {
         {/* ------------------------------------------------ main grid */}
         <div className="asd-grid">
           <div style={{ minWidth: 0 }}>
-            <Panel title={showV2 ? "Half-hourly load · Version 2" : "Half-hourly load"} subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
+            <Panel title={view === "v1" ? "Half-hourly load" : `Half-hourly load · ${versionLabel(view)}`} subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={barData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
@@ -725,6 +782,13 @@ export default function ApplianceAttributionDashboard() {
           </div>
 
           <div style={{ minWidth: 0 }}>
+            {warnings.length > 0 && (
+              <Panel title="Day warnings" subtitle={`From the ${versionLabel(view)} run`}>
+                {warnings.map((w, i) => (
+                  <div key={i} style={{ fontSize: 12, lineHeight: 1.55, color: "#8F3A3A", background: "#FBEFEE", border: "1px solid #F0D3D0", borderRadius: 8, padding: "8px 10px", marginBottom: i === warnings.length - 1 ? 0 : 6 }}>{w}</div>
+                ))}
+              </Panel>
+            )}
             {v2Info && <V2Panel info={v2Info} />}
             <Panel title="Day summary">
               <StatRow k="Readings sampled" v={`${slots.length} slots`} />
@@ -757,7 +821,9 @@ export default function ApplianceAttributionDashboard() {
 
             <Panel title="Reading these numbers">
               <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.65 }}>
-                Induction, EV and AC are detected from the readings; the rest are matched from each appliance's rating and usual hours.
+                Version 1 is the first reading of a day; Version 2 re-tests each of its stretches against every appliance it could be;
+                Version 3 is a separate run over its own dates. Induction, EV and AC are detected from the readings; the rest are matched
+                from each appliance's rating and usual hours.
                 "Unexplained" is whatever the meter read beyond all of them — it is not a separate measured circuit.
                 <br /><br />
                 If a slot's claims add up to more than the meter read, its bar is scaled to the reading and the tooltip shows what was
