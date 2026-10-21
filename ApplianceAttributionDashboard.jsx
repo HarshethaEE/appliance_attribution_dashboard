@@ -30,7 +30,7 @@ const allDays = (c) => [...new Set([...Object.keys(c.days || {}), ...Object.keys
 const VERSIONS = [
   { id: "v1", label: "Version 1" },
   { id: "v2", label: "Version 2", hint: "The second possibility" },
-  { id: "v3", label: "Version 3", hint: "A separate run over its own 14 days" }
+  { id: "v3", label: "Version 1.b", hint: "A separate run over its own 14 days" }
 ];
 const versionLabel = (id) => VERSIONS.find((v) => v.id === id).label;
 
@@ -682,7 +682,12 @@ export default function ApplianceAttributionDashboard() {
   // "2026-05-03 · V3" - which readings each date in the dropdown has
   const dayOptionLabel = (d) => {
     const v = versionsFor(consumer, d);
-    return `${d} · ${VERSIONS.filter((x) => v[x.id]).map((x) => x.id.toUpperCase()).join(", ")}`;
+
+    const labels = VERSIONS
+      .filter((x) => v[x.id])
+      .map((x) => x.id === "v3" ? "V1.b" : x.id.toUpperCase());
+
+    return `${d} · ${labels.join(", ")}`;
   };
 
   return (
@@ -822,7 +827,7 @@ export default function ApplianceAttributionDashboard() {
             <Panel title="Reading these numbers">
               <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.65 }}>
                 Version 1 is the first reading of a day; Version 2 re-tests each of its stretches against every appliance it could be;
-                Version 3 is a separate run over its own dates. Induction, EV and AC are detected from the readings; the rest are matched
+                Version 1.b is a separate run over its own dates. Induction, EV and AC are detected from the readings; the rest are matched
                 from each appliance's rating and usual hours.
                 "Unexplained" is whatever the meter read beyond all of them — it is not a separate measured circuit.
                 <br /><br />
