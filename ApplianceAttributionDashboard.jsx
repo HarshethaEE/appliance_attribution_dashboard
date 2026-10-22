@@ -225,6 +225,28 @@ function timeLabel(first, last) {
 }
 
 // ---------------------------------------------------------------------------
+// CSV download helpers
+// ---------------------------------------------------------------------------
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCsv(filename, header, rows) {
+  const text = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  // BOM so Excel reads UTF-8 correctly
+  const blob = new Blob(["\uFEFF" + text], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
 // Styles shared by the pieces below
 // ---------------------------------------------------------------------------
 const CSS = `
@@ -241,6 +263,11 @@ const CSS = `
 .asd-btn { height: 40px; padding: 0 16px; border: 0; border-radius: 8px; background: ${COLORS.teal}; color: #fff; font: 600 13px ${SANS};
   display: inline-flex; align-items: center; cursor: pointer; white-space: nowrap; }
 .asd-btn:hover { filter: brightness(0.94); }
+.asd-btn-outline { height: 32px; padding: 0 12px; border: 1px solid ${COLORS.border}; border-radius: 8px; background: #fff; color: ${COLORS.text};
+  font: 600 12px ${SANS}; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; flex: 0 0 auto; }
+.asd-btn-outline:hover:not(:disabled) { background: ${COLORS.soft}; border-color: #CFC9B8; }
+.asd-btn-outline:focus-visible { outline: 2px solid ${COLORS.teal}; outline-offset: 2px; }
+.asd-btn-outline:disabled { color: #B5B09F; cursor: not-allowed; }
 .asd-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; border: 1px solid ${COLORS.border};
   background: #fff; color: ${COLORS.text}; font: 500 12px ${SANS}; cursor: pointer; transition: opacity .12s, background .12s, border-color .12s; }
 .asd-chip:hover { background: ${COLORS.soft}; border-color: #CFC9B8; }
@@ -286,16 +313,19 @@ function StatRow({ k, v, last }) {
   );
 }
 
-function Panel({ title, subtitle, children, style }) {
+function Panel({ title, subtitle, action, children, style }) {
   return (
     <section style={{
       background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 12,
       padding: "18px 20px", marginBottom: 16, boxShadow: "0 1px 3px rgba(38,36,30,0.07)", ...style
     }}>
       {title && (
-        <header style={{ marginBottom: 14 }}>
-          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 650, letterSpacing: "-0.005em", color: COLORS.text }}>{title}</h2>
-          {subtitle && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 3, lineHeight: 1.5 }}>{subtitle}</div>}
+        <header style={{ marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: 14, fontWeight: 650, letterSpacing: "-0.005em", color: COLORS.text }}>{title}</h2>
+            {subtitle && <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 3, lineHeight: 1.5 }}>{subtitle}</div>}
+          </div>
+          {action}
         </header>
       )}
       {children}
@@ -640,6 +670,7 @@ export default function ApplianceAttributionDashboard() {
     const sp = splitSlot(s);
     const row = {
       t: s.t,
+      date: slotDates[i],
       x: day === "__all__" ? `${slotDates[i]} ${s.t}` : s.t,
       actual: s.k,
       claimed: sp.claimed,
@@ -654,6 +685,20 @@ export default function ApplianceAttributionDashboard() {
     a.otherKeys.forEach((key) => { row[applianceLabel(key)] = sp.oth[key] || 0; });
     return row;
   });
+
+  // Download the chart's data as CSV: one row per half-hour, one column per appliance
+  function handleDownloadCsv() {
+    const header = ["Date", "Time", "Meter reading (kW)", ...series.map((x) => `${x.name} (kW)`)];
+    const body = barData.map((r) => [
+      r.date,
+      r.t,
+      r.actual.toFixed(3),
+      ...series.map((x) => (r[x.name] || 0).toFixed(3))
+    ]);
+    const safe = (v) => String(v).replace(/[^\w.-]+/g, "_");
+    const dayPart = day === "__all__" ? "all-days" : day;
+    downloadCsv(`${safe(consumer.name)}_${safe(scno)}_${dayPart}_${view}.csv`, header, body);
+  }
 
   // round y-axis ticks from the tallest FULL stack, so the scale stays fixed when the legend filters
   const stackMax = Math.max(0.1, ...barData.map((r) => series.reduce((t, x) => t + (r[x.name] || 0), 0)));
@@ -766,7 +811,15 @@ export default function ApplianceAttributionDashboard() {
         {/* ------------------------------------------------ main grid */}
         <div className="asd-grid">
           <div style={{ minWidth: 0 }}>
-            <Panel title={view === "v1" ? "Half-hourly load" : `Half-hourly load · ${versionLabel(view)}`} subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}>
+            <Panel
+              title={view === "v1" ? "Half-hourly load" : `Half-hourly load · ${versionLabel(view)}`}
+              subtitle={selected.length ? `Showing only ${selected.join(", ")} · click a legend item to add or remove it` : "Each bar is one half-hour of the meter reading, stacked by appliance · click a legend item to isolate it"}
+              action={
+                <button type="button" className="asd-btn-outline" onClick={handleDownloadCsv} disabled={!barData.length}>
+                  ↓ Download CSV
+                </button>
+              }
+            >
               <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={barData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
