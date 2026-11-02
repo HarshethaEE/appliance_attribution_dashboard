@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
 } from "recharts";
-import { INITIAL_CONSUMERS, mergeConsumer, mergeConsumerV3 } from "./consumerData";
+import { INITIAL_CONSUMERS, mergeConsumer, mergeConsumerV1b, mergeConsumerV3, stubConsumer } from "./consumerData";
 
 // ---------------------------------------------------------------------------
 // Colors (light theme) - matches the companion Consumer Load Analyzer app
@@ -23,26 +23,51 @@ const ON_KW = 0.01; // an appliance counts as "on" in a slot above this
 // Which consumer / day opens first (falls back to the first consumer / day if not present)
 const DEFAULT_SCNO = "112206A806395345"; // NAVYA INFRACON PROJECTS PVT LTD
 const DEFAULT_DAY = "2026-07-02";
-// Every date a consumer has any reading for: Version 1 (and 2) days plus Version 3 days,
+// Every date a consumer has any reading for: Version 1 (and 2) days plus Version 1.b and Version 3 days,
 // which are often different dates.
-const allDays = (c) => [...new Set([...Object.keys(c.days || {}), ...Object.keys(c.daysV3 || {})])].sort();
+// Readings live in one file per consumer, in three folders, each with an index.json ({ scno: [dates] }):
+//   public/data/v1/   Versions 1 and 2      public/data/v1b/  Version 1.b      public/data/v3/  Version 3
+// c.v1Dates / c.v1bDates / c.v3Dates come from those indexes, so the dates are listed before a consumer's file is fetched.
+const V1_DIR = "/data/v1/";
+const V1B_DIR = "/data/v1b/";
+const V3_DIR = "/data/v3/";
+// Fetch a JSON file. A dev server answers a missing file with the app's index.html (status 200), which would
+// otherwise surface as "Unexpected token '<'", so say plainly that the file is not where the app looks for it.
+function fetchJson(url) {
+  return fetch(url).then(async (response) => {
+    if (!response.ok) throw new Error(`${url} was not found (HTTP ${response.status})`);
+    const text = await response.text();
+    if (text.trimStart().startsWith("<")) {
+      throw new Error(`${url} was not found - the server returned the web page instead. Check that public${url} exists, then restart the dev server`);
+    }
+    return JSON.parse(text);
+  });
+}
+const allDays = (c) => [...new Set([
+  ...Object.keys(c.days || {}), ...Object.keys(c.daysV1b || {}), ...Object.keys(c.daysV3 || {}),
+  ...(c.v1Dates || []), ...(c.v1bDates || []), ...(c.v3Dates || [])
+])].sort();
 
 const VERSIONS = [
   { id: "v1", label: "Version 1" },
   { id: "v2", label: "Version 2", hint: "The second possibility" },
-  { id: "v3", label: "Version 1.b", hint: "A separate run over its own 14 days" }
+  { id: "v1b", label: "Version 1.b", hint: "A separate run over its own 14 days" },
+  { id: "v3", label: "Version 3", hint: "The newer run" }
 ];
 const versionLabel = (id) => VERSIONS.find((v) => v.id === id).label;
 
 // Which readings exist for a day ("__all__" = any day of the consumer)
 function versionsFor(c, day) {
-  const has = (map) => (day === "__all__" ? Object.keys(map || {}).length > 0 : !!(map && map[day]));
-  return { v1: has(c.days), v2: has(c.daysV2), v3: has(c.daysV3) };
+  const has = (map, dates) => (day === "__all__"
+    ? Object.keys(map || {}).length > 0 || (dates || []).length > 0
+    : !!((map && map[day]) || (dates || []).includes(day)));
+  // Version 2 is only known once the consumer's V1/V2 file has loaded
+  return { v1: has(c.days, c.v1Dates), v2: has(c.daysV2), v1b: has(c.daysV1b, c.v1bDates), v3: has(c.daysV3, c.v3Dates) };
 }
 
 const START_SCNO = INITIAL_CONSUMERS[DEFAULT_SCNO] ? DEFAULT_SCNO : Object.keys(INITIAL_CONSUMERS)[0];
-const START_DAYS = allDays(INITIAL_CONSUMERS[START_SCNO]);
-const START_DAY = START_DAYS.includes(DEFAULT_DAY) ? DEFAULT_DAY : START_DAYS[0];
+// the dates are not known until the indexes load; an effect below moves to the first real date if this one is absent
+const START_DAY = DEFAULT_DAY;
 
 // ---------------------------------------------------------------------------
 // Appliance names and colors. Keys come from the pipeline's `balance`
@@ -184,7 +209,8 @@ function analyze(slots) {
   const otherKeys = Object.keys(othKwh).sort((x, y) => othKwh[y] - othKwh[x] || x.localeCompare(y));
 
   return {
-    miscKwh, indKwh, evKwh, totalKwh, cappedCount, minK, maxK, peakT,
+    miscKwh, indKwh, evKwh, totalKwh, cappedCount,
+    minK: slots.length ? minK : 0, maxK: slots.length ? maxK : 0, peakT,
     indPeak, evPeak, indCount, evCount, indPeakKw, evPeakKw, indFirst, indLast, evFirst, evLast,
     othKwh, othCount, othPeak, othPeakKw, othInferred, otherKeys,
     hasBalance, flaggedCount
@@ -571,33 +597,70 @@ export default function ApplianceAttributionDashboard() {
   const [picked, setPicked] = useState([]); // appliance names isolated in the chart legend
   const [version, setVersion] = useState("v1"); // which reading of the day the charts show (preferred)
 
-  // Load Version 3 separately so its large dataset does not slow the initial JS bundle.
-  // Versions 1 and 2 render first; Version 3 becomes available automatically when loaded.
+  // Readings are one file per consumer. The two small indexes load first (which consumers and dates have data),
+  // then only the selected consumer's files are fetched, the first time it is opened.
+  const requested = useRef(new Set());
+
   useEffect(() => {
     let cancelled = false;
-    fetch("/consumerDataV3.json")
-      .then((response) => {
-        if (!response.ok) throw new Error(`Could not load consumerDataV3.json (${response.status})`);
-        return response.json();
-      })
-      .then((rawV3) => {
+    const readIndex = (dir) => fetchJson(dir + "index.json");
+    Promise.all([readIndex(V1_DIR), readIndex(V1B_DIR), readIndex(V3_DIR)])
+      .then(([v1, v1b, v3]) => {
         if (cancelled) return;
-        const rows = Array.isArray(rawV3) ? rawV3 : [rawV3];
-        setConsumers((current) => rows.reduce((next, raw) => mergeConsumerV3(next, raw), current));
+        setConsumers((current) => {
+          const next = { ...current };
+          const ids = new Set([...Object.keys(v1), ...Object.keys(v1b), ...Object.keys(v3)]);
+          ids.forEach((id) => {
+            next[id] = { ...(next[id] || stubConsumer(id)), v1Dates: v1[id] || [], v1bDates: v1b[id] || [], v3Dates: v3[id] || [] };
+          });
+          return next;
+        });
       })
       .catch((err) => {
-        if (!cancelled) setFileError(`Version 3 data could not be loaded: ${err.message}`);
+        if (!cancelled) setFileError(`Readings could not be loaded: ${err.message}`);
       });
     return () => { cancelled = true; };
   }, []);
 
+  const cur = consumers[scno];
+  const needsV1 = !!(cur && (cur.v1Dates || []).length && !cur.v1Loaded);
+  const needsV1b = !!(cur && (cur.v1bDates || []).length && !cur.v1bLoaded);
+  const needsV3 = !!(cur && (cur.v3Dates || []).length && !cur.v3Loaded);
+  const needsLoad = needsV1 || needsV1b || needsV3;
+
+  useEffect(() => {
+    const id = scno;
+    const load = (kind, dir, merge, flag) => {
+      const key = `${kind}:${id}`;
+      if (requested.current.has(key)) return;
+      requested.current.add(key);
+      fetchJson(`${dir}${id}.json`)
+        .then((raw) => {
+          setConsumers((current) => {
+            const next = merge(current, raw);
+            return next[id] ? { ...next, [id]: { ...next[id], [flag]: true } } : next;
+          });
+        })
+        .catch((err) => {
+          requested.current.delete(key); // retry the next time this consumer is opened
+          setFileError(`Readings for ${id} could not be loaded: ${err.message}`);
+        });
+    };
+    if (needsV1) load("v1", V1_DIR, mergeConsumer, "v1Loaded");
+    if (needsV1b) load("v1b", V1B_DIR, mergeConsumerV1b, "v1bLoaded");
+    if (needsV3) load("v3", V3_DIR, mergeConsumerV3, "v3Loaded");
+  }, [scno, needsV1, needsV1b, needsV3]);
+
   const consumer = consumers[scno];
   const dayOptions = allDays(consumer);
+  useEffect(() => {
+    if (dayOptions.length && day !== "__all__" && !dayOptions.includes(day)) setDay(dayOptions[0]);
+  }, [dayOptions.join("|"), day]);
   const equipment = consumer.equipment || [];
 
   // The preferred version when this day has it, otherwise whichever reading the day does have
   const available = versionsFor(consumer, day);
-  const view = available[version] ? version : ["v1", "v3", "v2"].find((v) => available[v]) || "v1";
+  const view = available[version] ? version : ["v1", "v1b", "v3", "v2"].find((v) => available[v]) || "v1";
 
   function handleFiles(fileList) {
     setFileError(null);
@@ -634,16 +697,16 @@ export default function ApplianceAttributionDashboard() {
   // the slots of the shown reading, and the date each slot belongs to
   const { slots, slotDates } = useMemo(() => {
     const c = consumers[scno];
-    const source = view === "v3" ? (c.daysV3 || {}) : c.days;
+    const source = view === "v3" ? (c.daysV3 || {}) : view === "v1b" ? (c.daysV1b || {}) : c.days;
     const pick = (d) => (view === "v2" && c.daysV2 && c.daysV2[d]) ? c.daysV2[d] : (source[d] || []);
     const dates = day === "__all__" ? Object.keys(source).sort() : [day];
     const list = dates.flatMap((d) => pick(d));
     return { slots: list, slotDates: dates.flatMap((d) => pick(d).map(() => d)) };
   }, [consumers, scno, day, view]);
   const showV2 = view === "v2";
-  // the day's pipeline warnings: Version 3 has its own, Version 1 and 2 share Version 1's
+  // the day's pipeline warnings: Version 1.b and Version 3 each have their own, Version 1 and 2 share Version 1's
   const warnings = day === "__all__" ? []
-    : ((view === "v3" ? consumer.v3Warnings : consumer.dayWarnings) || {})[day] || [];
+    : ((view === "v3" ? consumer.v3Warnings : view === "v1b" ? consumer.v1bWarnings : consumer.dayWarnings) || {})[day] || [];
   const v2Info = day !== "__all__" && showV2 ? (consumer.v2Info || {})[day] : null;
 
   const a = useMemo(() => analyze(slots), [slots]);
@@ -721,7 +784,7 @@ export default function ApplianceAttributionDashboard() {
     setScno(newScno);
     const c = consumers[newScno];
     setDay(allDays(c)[0]);
-    if (!Object.keys(c.days || {}).length && Object.keys(c.daysV3 || {}).length) setVersion("v3");
+    if (!(c.v1Dates || []).length && !Object.keys(c.days || {}).length && ((c.v1bDates || []).length || Object.keys(c.daysV1b || {}).length)) setVersion("v1b");
   }
 
   // "2026-05-03 · V3" - which readings each date in the dropdown has
@@ -730,7 +793,7 @@ export default function ApplianceAttributionDashboard() {
 
     const labels = VERSIONS
       .filter((x) => v[x.id])
-      .map((x) => x.id === "v3" ? "V1.b" : x.id.toUpperCase());
+      .map((x) => x.id === "v1b" ? "V1.b" : x.id.toUpperCase());
 
     return `${d} · ${labels.join(", ")}`;
   };
@@ -757,7 +820,7 @@ export default function ApplianceAttributionDashboard() {
             </div>
             <input id="consumer-file-input" type="file" accept="application/json,.json" multiple
               onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
-            <span style={{ fontSize: 11, color: COLORS.muted }}>Version 3 data loads automatically from <code>public/consumerDataV3.json</code>.</span>
+            <span style={{ fontSize: 11, color: COLORS.muted }}>Readings load per consumer from <code>public/data/</code>.</span>
           </div>
         </header>
         {fileError && (
@@ -795,6 +858,12 @@ export default function ApplianceAttributionDashboard() {
             <div style={{ fontSize: 12, color: COLORS.muted, ...NUM }}>Service no. {scno} · {dayLabel} · {versionLabel(view)}</div>
           </div>
         </div>
+
+        {needsLoad && (
+          <div style={{ fontSize: 13, color: COLORS.muted, background: COLORS.soft, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "9px 12px", marginBottom: 16 }}>
+            Loading readings for this consumer…
+          </div>
+        )}
 
         {/* ------------------------------------------------ KPI row */}
         <div className="asd-kpis">
@@ -880,7 +949,7 @@ export default function ApplianceAttributionDashboard() {
             <Panel title="Reading these numbers">
               <div style={{ fontSize: 12, color: COLORS.muted, lineHeight: 1.65 }}>
                 Version 1 is the first reading of a day; Version 2 re-tests each of its stretches against every appliance it could be;
-                Version 1.b is a separate run over its own dates. Induction, EV and AC are detected from the readings; the rest are matched
+                Version 1.b is a separate run over its own dates; Version 3 is the newer run. Induction, EV and AC are detected from the readings; the rest are matched
                 from each appliance's rating and usual hours.
                 "Unexplained" is whatever the meter read beyond all of them — it is not a separate measured circuit.
                 <br /><br />
